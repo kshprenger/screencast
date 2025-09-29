@@ -23,6 +23,6 @@ pub(super) enum SignalingMessage {
     Offer(SDP),
     Answer(SDP),
     IceCandidate(IceCandidate),
-    NewPeer(Uuid),
-    PeerLeft(Uuid),
+    NewPeer { peer_id: Uuid },
+    PeerLeft { peer_id: Uuid },
 }
