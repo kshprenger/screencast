@@ -102,12 +102,10 @@ mod tests {
     async fn test_add_peer_notifies_others() {
         let manager = PeerManager::new();
 
-        // Add first peer
         let peer1_id = Uuid::new_v4();
         let (tx1, mut rx1) = mpsc::channel(10);
         manager.add_peer(peer1_id, tx1).await;
 
-        // Add second peer
         let peer2_id = Uuid::new_v4();
         let (tx2, _rx2) = mpsc::channel(10);
         manager.add_peer(peer2_id, tx2).await;
@@ -124,12 +122,10 @@ mod tests {
     async fn test_remove_peer_notifies_others() {
         let manager = PeerManager::new();
 
-        // Add first peer
         let peer1_id = Uuid::new_v4();
         let (tx1, mut rx1) = mpsc::channel(10);
         manager.add_peer(peer1_id, tx1).await;
 
-        // Add second peer
         let peer2_id = Uuid::new_v4();
         let (tx2, _rx2) = mpsc::channel(10);
         manager.add_peer(peer2_id, tx2).await;
@@ -137,7 +133,6 @@ mod tests {
         // Clear the notification from adding peer2
         let _ = rx1.recv().await;
 
-        // Remove second peer
         manager.remove_peer(&peer2_id).await;
 
         // Check if peer1 received notification about peer2 leaving
