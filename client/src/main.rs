@@ -7,7 +7,6 @@ fn normalized(filename: String) -> String {
 }
 
 fn main() {
-    let start = Instant::now();
     let monitors = Monitor::all().unwrap();
 
     dir::create_all("target/monitors", true).unwrap();
@@ -22,6 +21,4 @@ fn main() {
             ))
             .unwrap();
     }
-
-    println!("运行耗时: {:?}", start.elapsed());
 }
