@@ -1,9 +1,10 @@
 use crate::webrtc_model;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
-type PeersMap = Arc<Mutex<HashMap<Uuid, mpsc::Sender<String>>>>;
+type PeersMap = Arc<RwLock<HashMap<Uuid, mpsc::Sender<String>>>>;
 
 #[derive(Clone, Default)]
 pub struct PeerManager {
@@ -13,12 +14,12 @@ pub struct PeerManager {
 impl PeerManager {
     pub fn new() -> Self {
         Self {
-            peers: Arc::new(Mutex::new(HashMap::new())),
+            peers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub async fn add_peer(&self, id: Uuid, tx: mpsc::Sender<String>) {
-        let mut peer_map = self.peers.lock().await;
+        let mut peer_map = self.peers.write().await;
 
         let new_peer_msg =
             serde_json::to_string(&webrtc_model::SignalingMessage::NewPeer { peer_id: id })
@@ -38,7 +39,7 @@ impl PeerManager {
     }
 
     pub async fn remove_peer(&self, id: &Uuid) {
-        let mut peer_map = self.peers.lock().await;
+        let mut peer_map = self.peers.write().await;
         peer_map.remove(id);
 
         let peer_left_msg =
@@ -57,7 +58,7 @@ impl PeerManager {
     }
 
     pub async fn broadcast_message(&self, sender_id: Uuid, msg: String) {
-        let peer_map = self.peers.lock().await;
+        let peer_map = self.peers.read().await;
         if let Some(own_tx) = peer_map.get(&sender_id) {
             if let Err(e) = own_tx.send(msg).await {
                 tracing::error!("Failed to broadcast message from {}: {}", sender_id, e);
@@ -80,7 +81,7 @@ mod tests {
 
         manager.add_peer(peer_id, tx).await;
 
-        let peers = manager.peers.lock().await;
+        let peers = manager.peers.read().await;
         assert_eq!(peers.len(), 1);
         assert!(peers.contains_key(&peer_id));
     }
@@ -92,10 +93,10 @@ mod tests {
         let (tx, _rx) = mpsc::channel(1);
 
         manager.add_peer(peer_id, tx).await;
-        assert_eq!(manager.peers.lock().await.len(), 1);
+        assert_eq!(manager.peers.read().await.len(), 1);
 
         manager.remove_peer(&peer_id).await;
-        assert!(manager.peers.lock().await.is_empty());
+        assert!(manager.peers.read().await.is_empty());
     }
 
     #[tokio::test]
