@@ -19,7 +19,7 @@ mod webrtc_model;
 use peers::PeerManager;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     config::setup_logging();
     let cors = config::setup_cors();
 
@@ -36,9 +36,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
     tracing::info!("Starting server on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service()).await?;
-    Ok(())
+    match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => {
+            if let Err(err) = axum::serve(listener, app.into_make_service()).await {
+                tracing::error!("Could not axum::serve {}", err);
+            }
+        }
+        Err(err) => {
+            tracing::error!("Could not bind address {}", err);
+        }
+    };
 }
 
 async fn ws_handler(
@@ -59,7 +66,8 @@ async fn handle_socket(socket: WebSocket, peer_manager: PeerManager, id: Uuid) {
     // Task to send messages from the mpsc channel to the WebSocket client
     let mut send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if sender.send(Message::Text(msg)).await.is_err() {
+            if let Err(err) = sender.send(Message::Text(msg)).await {
+                tracing::warn!("Done send_task for {id}: {err}");
                 break;
             }
         }
@@ -72,6 +80,7 @@ async fn handle_socket(socket: WebSocket, peer_manager: PeerManager, id: Uuid) {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             peer_manager_clone.broadcast_message(id, text).await;
         }
+        tracing::warn!("Done recv_task for {id}");
     });
 
     // Wait for either task to complete and then cancel abort another one

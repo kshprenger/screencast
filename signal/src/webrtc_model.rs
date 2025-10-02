@@ -20,9 +20,9 @@ pub(super) struct IceCandidate {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub(super) enum SignalingMessage {
-    Offer(SDP),
-    Answer(SDP),
-    IceCandidate(IceCandidate),
+    Offer { sdp: SDP },
+    Answer { sdp: SDP },
+    IceCandidate { ice_candidate: IceCandidate },
     NewPeer { peer_id: Uuid },
     PeerLeft { peer_id: Uuid },
 }
