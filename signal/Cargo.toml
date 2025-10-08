@@ -14,3 +14,4 @@ uuid = { version = "1.8.0", features = ["v4", "serde"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 clap = { version = "4.5.4", features = ["derive"] }
+webrtc_model = { version = "0.1.0", path = "../webrtc_model" }

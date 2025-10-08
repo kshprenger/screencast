@@ -1,2 +1,2 @@
 [workspace]
-members = ["signal", "client"]
+members = ["signal", "client", "webrtc_model"]

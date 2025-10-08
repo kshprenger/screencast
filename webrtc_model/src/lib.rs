@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SDP {
+pub struct SDP {
     sdp: String,
     #[serde(rename = "type")]
     type_: String,
@@ -11,7 +11,7 @@ pub(super) struct SDP {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct IceCandidate {
+pub struct IceCandidate {
     candidate: String,
     sdp_m_line_index: u32,
     sdp_mid: String,
@@ -19,7 +19,7 @@ pub(super) struct IceCandidate {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
-pub(super) enum SignalingMessage {
+pub enum SignalingMessage {
     Offer { sdp: SDP },
     Answer { sdp: SDP },
     IceCandidate { ice_candidate: IceCandidate },

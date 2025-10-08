@@ -14,7 +14,6 @@ use uuid::Uuid;
 
 mod config;
 mod peers;
-mod webrtc_model;
 
 use peers::PeerManager;
 
