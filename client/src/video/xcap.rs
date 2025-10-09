@@ -1,8 +1,11 @@
 use super::errors::VideoErrors;
-use super::{Frame, ScreenCapturer, FRAME_BUFFER_SIZE};
+use super::{Frame, ScreenCapturer};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use xcap::Monitor;
+
+// 10 seconds in 60 fps
+const FRAME_BUFFER_SIZE: usize = 10 * 60;
 
 pub struct XCapCapturer {
     monitor: Monitor,
@@ -39,7 +42,7 @@ impl ScreenCapturer for XCapCapturer {
         if let Some(monitor) = Self::get_primary_monitor() {
             Ok(Self { monitor })
         } else {
-            Err(VideoErrors::NoMonitorError)
+            Err(VideoErrors::NoMonitorFound)
         }
     }
 
@@ -70,7 +73,7 @@ impl ScreenCapturer for XCapCapturer {
             }
             Err(err) => {
                 tracing::error!("Could not start video capturing: {err}");
-                return Err(VideoErrors::RecordError);
+                return Err(VideoErrors::CannotCapture);
             }
         }
     }

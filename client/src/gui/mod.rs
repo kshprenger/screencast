@@ -1,10 +1,15 @@
-use eframe::egui;
+mod state;
 
-pub(super) struct GUI {}
+use eframe::egui;
+use tokio::sync::mpsc;
+
+pub(super) struct GUI {
+    frame_rx: Option<mpsc::Receiver<super::video::Frame>>,
+}
 
 impl Default for GUI {
     fn default() -> Self {
-        GUI {}
+        GUI { frame_rx: None }
     }
 }
 
