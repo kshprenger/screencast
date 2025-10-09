@@ -1,16 +1,7 @@
-use std::fmt;
-
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub(super) enum VideoErrors {
+    #[error("No monitor found to record")]
     NoMonitorFound,
+    #[error("An error occurred during screen capturing")]
     CannotCapture,
-}
-
-impl fmt::Display for VideoErrors {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            VideoErrors::NoMonitorFound => write!(f, "No monitor found to record."),
-            VideoErrors::CannotCapture => write!(f, "An error occurred during screen capturing."),
-        }
-    }
 }

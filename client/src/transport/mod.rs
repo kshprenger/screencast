@@ -57,7 +57,7 @@ impl WebrtcTransport {
                 .await
             {
                 tracing::error!("Failed to send text message: {err}");
-                return Err(TransportErrors::SendFailed);
+                return Err(TransportErrors::SendControlFailed);
             }
             return Ok(());
         }
