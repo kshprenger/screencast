@@ -26,7 +26,7 @@ pub struct WebrtcTransport {
     ws_tx: Option<WsTx>,
     webrtc_api: API,
     default_config: RTCConfiguration,
-    peers: HashMap<Uuid, RTCPeerConnection>,
+    peers: HashMap<Uuid, Option<RTCPeerConnection>>,
 }
 
 impl WebrtcTransport {
@@ -97,6 +97,16 @@ impl WebrtcTransport {
 
     async fn handle_incoming_message(&mut self, message: SignalingMessage) {
         match message {
+            SignalingMessage::NewPeer { peer_id } =>{
+                tracing::info!("New peer connected, peer_is: {}", peer_id);
+                self.peers.insert(peer_id, None);
+            }
+
+            SignalingMessage::NewPeer { peer_id } =>{
+                tracing::info!("Peer disconnected, peer_is: {}", peer_id);
+                self.peers.remove(&peer_id);
+            }
+
             SignalingMessage::Offer { sdp } => {
                 tracing::info!("Received SDP Offer: {:?}", sdp);
                 let conn = match self.webrtc_api.new_peer_connection(self.default_config.clone()).await{
@@ -129,12 +139,14 @@ impl WebrtcTransport {
                     tracing::error!("Could not answer on offer: {}", err);
                 }
             }
+
             SignalingMessage::Answer { sdp } => {
                 tracing::info!("Received SDP Answer: {:?}", sdp);
                 if let Err(err) = peer_connection.set_remote_description(sdp).await {
                     tracing::error!("Failed to set remote description: {:?}", err);
                 }
             }
+
             SignalingMessage::IceCandidate { ice_candidate } => {
                 tracing::info!("Received ICE Candidate: {:?}", ice_candidate);
                 todo!();
