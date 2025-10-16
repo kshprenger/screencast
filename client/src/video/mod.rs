@@ -2,7 +2,6 @@ mod errors;
 mod xcap;
 
 use errors::VideoErrors;
-use tokio::sync::mpsc;
 
 #[derive(Debug)]
 pub struct Frame {
@@ -16,5 +15,5 @@ pub trait ScreenCapturer {
     fn new() -> Result<Self, VideoErrors>
     where
         Self: Sized;
-    async fn start_capturing(&self) -> Result<mpsc::Receiver<Frame>, VideoErrors>;
+    async fn start_capturing(&self) -> Result<tokio::sync::mpsc::Receiver<Frame>, VideoErrors>;
 }

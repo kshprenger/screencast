@@ -1,13 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct SDP {
-    sdp: String,
-    #[serde(rename = "type")]
-    type_: String,
-}
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -20,8 +13,8 @@ pub struct IceCandidate {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum SignalingMessage {
-    Offer { sdp: SDP },
-    Answer { sdp: SDP },
+    Offer { sdp: RTCSessionDescription },
+    Answer { sdp: RTCSessionDescription },
     IceCandidate { ice_candidate: IceCandidate },
     NewPeer { peer_id: Uuid },
     PeerLeft { peer_id: Uuid },
