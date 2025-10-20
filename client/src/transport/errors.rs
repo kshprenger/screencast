@@ -1,4 +1,3 @@
-
 #[derive(thiserror::Error, Debug)]
 pub enum TransportErrors {
     #[error("Connection failed")]

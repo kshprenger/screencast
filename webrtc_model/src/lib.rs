@@ -13,9 +13,21 @@ pub struct IceCandidate {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum SignalingMessage {
-    Offer { sdp: RTCSessionDescription },
-    Answer { sdp: RTCSessionDescription },
-    IceCandidate { ice_candidate: IceCandidate },
-    NewPeer { peer_id: Uuid },
-    PeerLeft { peer_id: Uuid },
+    Offer {
+        peer_id: Uuid,
+        sdp: RTCSessionDescription,
+    },
+    Answer {
+        peer_id: Uuid,
+        sdp: RTCSessionDescription,
+    },
+    IceCandidate {
+        ice_candidate: IceCandidate,
+    },
+    NewPeer {
+        peer_id: Uuid,
+    },
+    PeerLeft {
+        peer_id: Uuid,
+    },
 }
