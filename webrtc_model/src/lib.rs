@@ -31,10 +31,16 @@ pub enum SignallingMessage {
         ice_candidate: IceCandidate,
     },
     NewPeer {
-        routing: RoutingOptions,
         peer_id: Uuid,
     },
     PeerLeft {
         peer_id: Uuid,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub struct RoutedSignallingMessage {
+    pub route: RoutingOptions,
+    pub message: SignallingMessage,
 }

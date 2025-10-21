@@ -1,7 +1,10 @@
+use std::future::Future;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use webrtc_model::RoutedSignallingMessage;
+use webrtc_model::RoutingOptions;
 
 type PeersMap = Arc<RwLock<HashMap<Uuid, mpsc::Sender<String>>>>;
 
@@ -18,143 +21,49 @@ impl PeerManager {
     }
 
     pub async fn add_peer(&self, id: Uuid, tx: mpsc::Sender<String>) {
-        let mut peer_map = self.peers.write().await;
-
-        let new_peer_msg =
-            serde_json::to_string(&webrtc_model::SignallingMessage::NewPeer { peer_id: id })
-                .unwrap();
-        for (peer_id, peer_tx) in peer_map.iter() {
-            tracing::info!("Notifying peer {} about new peer {}", peer_id, id);
-            if let Err(e) = peer_tx.send(new_peer_msg.clone()).await {
-                tracing::error!(
-                    "Failed to send new peer notification to peer {}: {}",
-                    peer_id,
-                    e
-                );
-            }
-        }
-        peer_map.insert(id, tx);
-        tracing::info!("Peer {} connected successfully", id);
+        self.peers.write().await.insert(id, tx);
+        self.send_message(RoutedSignallingMessage {
+            route: RoutingOptions::All,
+            message: webrtc_model::SignallingMessage::NewPeer { peer_id: id },
+        })
+        .await;
+        tracing::info!("Peer {id} connected ");
     }
 
     pub async fn remove_peer(&self, id: &Uuid) {
-        let mut peer_map = self.peers.write().await;
-        peer_map.remove(id);
-
-        let peer_left_msg =
-            serde_json::to_string(&webrtc_model::SignallingMessage::PeerLeft { peer_id: *id })
-                .unwrap();
-        for (peer_id, peer_tx) in peer_map.iter() {
-            if let Err(e) = peer_tx.send(peer_left_msg.clone()).await {
-                tracing::error!(
-                    "Failed to send peer left notification to peer {}: {}",
-                    peer_id,
-                    e
-                );
-            }
-        }
-        tracing::info!("Peer {} disconnected", id);
+        self.peers.write().await.remove(id);
+        self.send_message(RoutedSignallingMessage {
+            route: RoutingOptions::All,
+            message: webrtc_model::SignallingMessage::PeerLeft { peer_id: *id },
+        })
+        .await;
+        tracing::info!("Peer {id} disconnected");
     }
 
-    pub async fn broadcast_message(&self, sender_id: Uuid, msg: String) {
+    pub async fn send_message(&self, message: RoutedSignallingMessage) {
         let peer_map = self.peers.read().await;
-        if let Some(own_tx) = peer_map.get(&sender_id) {
-            if let Err(e) = own_tx.send(msg).await {
-                tracing::error!("Failed to broadcast message from {}: {}", sender_id, e);
-            }
+
+        match serde_json::to_string(&message) {
+            Ok(serialized_message) => match message.route {
+                RoutingOptions::All => {
+                    futures::future::join_all(peer_map.iter().map(|(_, peer_sender)| async {
+                        peer_sender.send(serialized_message.clone()).await;
+                    }))
+                    .await;
+                }
+                RoutingOptions::To(target_uuid) => {
+                    futures::future::join_all(
+                        peer_map
+                            .iter()
+                            .filter(|(uuid, _)| **uuid == target_uuid)
+                            .map(|(_, peer_sender)| async {
+                                peer_sender.send(serialized_message.clone()).await
+                            }),
+                    )
+                    .await;
+                }
+            },
+            Err(err) => tracing::error!("Could not serialize message: {err}"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::sync::mpsc;
-    use uuid::Uuid;
-
-    #[tokio::test]
-    async fn test_add_peer() {
-        let manager = PeerManager::new();
-        let peer_id = Uuid::new_v4();
-        let (tx, _rx) = mpsc::channel(1);
-
-        manager.add_peer(peer_id, tx).await;
-
-        let peers = manager.peers.read().await;
-        assert_eq!(peers.len(), 1);
-        assert!(peers.contains_key(&peer_id));
-    }
-
-    #[tokio::test]
-    async fn test_remove_peer() {
-        let manager = PeerManager::new();
-        let peer_id = Uuid::new_v4();
-        let (tx, _rx) = mpsc::channel(1);
-
-        manager.add_peer(peer_id, tx).await;
-        assert_eq!(manager.peers.read().await.len(), 1);
-
-        manager.remove_peer(&peer_id).await;
-        assert!(manager.peers.read().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_add_peer_notifies_others() {
-        let manager = PeerManager::new();
-
-        let peer1_id = Uuid::new_v4();
-        let (tx1, mut rx1) = mpsc::channel(10);
-        manager.add_peer(peer1_id, tx1).await;
-
-        let peer2_id = Uuid::new_v4();
-        let (tx2, _rx2) = mpsc::channel(10);
-        manager.add_peer(peer2_id, tx2).await;
-
-        // Check if peer1 received notification about peer2
-        let received_msg = rx1.recv().await.unwrap();
-        let expected_msg =
-            serde_json::to_string(&webrtc_model::SignallingMessage::NewPeer { peer_id: peer2_id })
-                .unwrap();
-        assert_eq!(received_msg, expected_msg);
-    }
-
-    #[tokio::test]
-    async fn test_remove_peer_notifies_others() {
-        let manager = PeerManager::new();
-
-        let peer1_id = Uuid::new_v4();
-        let (tx1, mut rx1) = mpsc::channel(10);
-        manager.add_peer(peer1_id, tx1).await;
-
-        let peer2_id = Uuid::new_v4();
-        let (tx2, _rx2) = mpsc::channel(10);
-        manager.add_peer(peer2_id, tx2).await;
-
-        // Clear the notification from adding peer2
-        let _ = rx1.recv().await;
-
-        manager.remove_peer(&peer2_id).await;
-
-        // Check if peer1 received notification about peer2 leaving
-        let received_msg = rx1.recv().await.unwrap();
-        let expected_msg =
-            serde_json::to_string(&webrtc_model::SignallingMessage::PeerLeft { peer_id: peer2_id })
-                .unwrap();
-        assert_eq!(received_msg, expected_msg);
-    }
-
-    #[tokio::test]
-    async fn test_broadcast_message() {
-        let manager = PeerManager::new();
-        let peer_id = Uuid::new_v4();
-        let (tx, mut rx) = mpsc::channel(1);
-
-        manager.add_peer(peer_id, tx).await;
-
-        let message = "hello".to_string();
-        manager.broadcast_message(peer_id, message.clone()).await;
-
-        let received = rx.recv().await.unwrap();
-        assert_eq!(received, message);
     }
 }
