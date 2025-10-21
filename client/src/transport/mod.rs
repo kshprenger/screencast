@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
@@ -16,8 +16,9 @@ use uuid::Uuid;
 use webrtc::api::{APIBuilder, API};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc_model::SignalingMessage;
+use webrtc_model::{RoutingOptions, SignallingMessage};
 
 type WsTx = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::protocol::Message>;
 type WsRx = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
@@ -89,13 +90,15 @@ impl WebrtcTransport {
         }
     }
 
-    async fn send_message(
+    async fn send_signalling_message(
         self: &Arc<Self>,
-        message: impl Into<String>,
+        message: SignallingMessage,
     ) -> Result<(), TransportErrors> {
         if let Some(ws_tx) = &mut self.conns_state.lock().await.ws_tx {
             if let Err(err) = ws_tx
-                .send(tungstenite::Message::Text(Utf8Bytes::from(message.into())))
+                .send(tungstenite::Message::Text(Utf8Bytes::from(
+                    serde_json::to_string(&message)?,
+                )))
                 .await
             {
                 tracing::error!("Failed to send text message: {err}");
@@ -106,17 +109,37 @@ impl WebrtcTransport {
         Err(TransportErrors::ConnectionIsNotOpened)
     }
 
-    async fn handle_incoming_message(self: &Arc<Self>, message: SignalingMessage) {
+    async fn handle_signalling_message(self: &Arc<Self>, message: SignallingMessage) {
         match message {
-            SignalingMessage::NewPeer { peer_id } => {
+            SignallingMessage::NewPeer { peer_id, routing } => {
                 tracing::info!("New peer connected, peer_is: {}", peer_id);
                 self.conns_state.lock().await.peers.insert(peer_id, None);
+
+                // Build all to all network topology.
+                // If somebody joins network broadcasting itself, we should reply back only to that peer
+                // in order not to flood network with messages.
+                match routing {
+                    RoutingOptions::All => {
+                        if let Err(err) = self
+                            .send_signalling_message(SignallingMessage::NewPeer {
+                                routing: RoutingOptions::To(peer_id),
+                                peer_id: self.self_id,
+                            })
+                            .await
+                        {
+                            tracing::error!("Could not reply to new_peer message: {err}");
+                        };
+                    }
+                    RoutingOptions::To(peer_id) => {
+                        tracing::debug!("Got unicast new_peer message from: {peer_id}")
+                    }
+                }
             }
-            SignalingMessage::PeerLeft { peer_id } => {
+            SignallingMessage::PeerLeft { peer_id } => {
                 tracing::info!("Peer disconnected, peer_is: {}", peer_id);
                 self.conns_state.lock().await.peers.remove(&peer_id);
             }
-            SignalingMessage::Offer { peer_id, sdp } => {
+            SignallingMessage::Offer { peer_id, sdp } => {
                 tracing::info!("Received SDP Offer from peer:{peer_id}, offer:{:?}", sdp);
                 let conn = match self
                     .webrtc_api
@@ -155,7 +178,7 @@ impl WebrtcTransport {
                     .insert(peer_id, Some(conn));
 
                 if let Err(err) = self
-                    .send_signal_message(SignalingMessage::Answer {
+                    .send_signalling_message(SignallingMessage::Answer {
                         peer_id: self.self_id,
                         sdp: answer,
                     })
@@ -164,18 +187,18 @@ impl WebrtcTransport {
                     tracing::error!("Could not answer on offer: {}", err);
                 }
             }
-            SignalingMessage::Answer { peer_id, sdp } => {
+            SignallingMessage::Answer { peer_id, sdp } => {
                 tracing::info!("Received SDP Answer: {:?}", sdp);
                 if let Err(err) = self.conns_state.lock().await.peers[&peer_id]
                     .as_ref()
-                    .unwrap()
+                    .unwrap() // We receiving answer only after creating offer
                     .set_remote_description(sdp)
                     .await
                 {
                     tracing::error!("Failed to set remote description: {:?}", err);
                 }
             }
-            SignalingMessage::IceCandidate { ice_candidate } => {
+            SignallingMessage::IceCandidate { ice_candidate } => {
                 tracing::info!("Received ICE Candidate: {:?}", ice_candidate);
                 todo!();
             }
@@ -184,13 +207,26 @@ impl WebrtcTransport {
 }
 
 impl WebrtcTransport {
-    pub async fn send_signal_message(
-        self: &Arc<Self>,
-        message: SignalingMessage,
-    ) -> Result<(), TransportErrors> {
-        self.send_message(serde_json::to_string(&message)?).await
+    pub async fn join_peer_network(self: &Arc<Self>) -> Result<(), TransportErrors> {
+        self.send_signalling_message(SignallingMessage::NewPeer {
+            routing: RoutingOptions::All,
+            peer_id: self.self_id,
+        })
+        .await
     }
 
+    pub async fn offer(
+        self: &Arc<Self>,
+        sdp: RTCSessionDescription,
+    ) -> Result<(), TransportErrors> {
+        self.send_signalling_message(SignallingMessage::Offer {
+            peer_id: self.self_id,
+            sdp,
+        })
+        .await
+    }
+
+    // Blocks
     pub async fn connect_and_handle(
         self: &Arc<Self>,
         ctx: tokio_util::sync::CancellationToken,
@@ -203,8 +239,8 @@ impl WebrtcTransport {
             }
             _ = async {
                 while let Some(Ok(tungstenite::Message::Text(text))) = rx.next().await {
-                    if let Ok(message) = serde_json::from_str::<SignalingMessage>(&text) {
-                        self.handle_incoming_message(message).await;
+                    if let Ok(message) = serde_json::from_str::<SignallingMessage>(&text) {
+                        self.handle_signalling_message(message).await;
                     } else {
                         tracing::warn!("Failed to parse incoming message: {}", text);
                     }

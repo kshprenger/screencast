@@ -11,8 +11,14 @@ pub struct IceCandidate {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum RoutingOptions {
+    All,
+    To(Uuid),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
-pub enum SignalingMessage {
+pub enum SignallingMessage {
     Offer {
         peer_id: Uuid,
         sdp: RTCSessionDescription,
@@ -25,6 +31,7 @@ pub enum SignalingMessage {
         ice_candidate: IceCandidate,
     },
     NewPeer {
+        routing: RoutingOptions,
         peer_id: Uuid,
     },
     PeerLeft {

@@ -21,7 +21,7 @@ impl PeerManager {
         let mut peer_map = self.peers.write().await;
 
         let new_peer_msg =
-            serde_json::to_string(&webrtc_model::SignalingMessage::NewPeer { peer_id: id })
+            serde_json::to_string(&webrtc_model::SignallingMessage::NewPeer { peer_id: id })
                 .unwrap();
         for (peer_id, peer_tx) in peer_map.iter() {
             tracing::info!("Notifying peer {} about new peer {}", peer_id, id);
@@ -42,7 +42,7 @@ impl PeerManager {
         peer_map.remove(id);
 
         let peer_left_msg =
-            serde_json::to_string(&webrtc_model::SignalingMessage::PeerLeft { peer_id: *id })
+            serde_json::to_string(&webrtc_model::SignallingMessage::PeerLeft { peer_id: *id })
                 .unwrap();
         for (peer_id, peer_tx) in peer_map.iter() {
             if let Err(e) = peer_tx.send(peer_left_msg.clone()).await {
@@ -113,7 +113,7 @@ mod tests {
         // Check if peer1 received notification about peer2
         let received_msg = rx1.recv().await.unwrap();
         let expected_msg =
-            serde_json::to_string(&webrtc_model::SignalingMessage::NewPeer { peer_id: peer2_id })
+            serde_json::to_string(&webrtc_model::SignallingMessage::NewPeer { peer_id: peer2_id })
                 .unwrap();
         assert_eq!(received_msg, expected_msg);
     }
@@ -138,7 +138,7 @@ mod tests {
         // Check if peer1 received notification about peer2 leaving
         let received_msg = rx1.recv().await.unwrap();
         let expected_msg =
-            serde_json::to_string(&webrtc_model::SignalingMessage::PeerLeft { peer_id: peer2_id })
+            serde_json::to_string(&webrtc_model::SignallingMessage::PeerLeft { peer_id: peer2_id })
                 .unwrap();
         assert_eq!(received_msg, expected_msg);
     }

@@ -6,7 +6,7 @@ mod gui;
 mod transport;
 mod video;
 
-fn main() -> eframe::Result {
+fn main() {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
         .finish();
@@ -14,10 +14,14 @@ fn main() -> eframe::Result {
 
     let args = cli::Args::parse();
 
+    let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+    rt.block_on(async move {});
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1080.0, 720.0]),
         ..Default::default()
     };
+
     eframe::run_native(
         "Screencast",
         options,
@@ -27,5 +31,5 @@ fn main() -> eframe::Result {
 
             Ok(Box::<gui::GUI>::default())
         }),
-    )
+    );
 }
