@@ -11,8 +11,8 @@ pub struct IceCandidate {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum RoutingOptions {
-    All,
+pub enum Routing {
+    Broadcast,
     To(Uuid),
 }
 
@@ -41,6 +41,6 @@ pub enum SignallingMessage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub struct RoutedSignallingMessage {
-    pub route: RoutingOptions,
+    pub routing: Routing,
     pub message: SignallingMessage,
 }

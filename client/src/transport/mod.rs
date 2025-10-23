@@ -18,7 +18,7 @@ use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc_model::{RoutingOptions, SignallingMessage};
+use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
 type WsTx = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::protocol::Message>;
 type WsRx = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
@@ -92,7 +92,7 @@ impl WebrtcTransport {
 
     async fn send_signalling_message(
         self: &Arc<Self>,
-        message: SignallingMessage,
+        message: RoutedSignallingMessage,
     ) -> Result<(), TransportErrors> {
         if let Some(ws_tx) = &mut self.conns_state.lock().await.ws_tx {
             if let Err(err) = ws_tx
@@ -109,29 +109,31 @@ impl WebrtcTransport {
         Err(TransportErrors::ConnectionIsNotOpened)
     }
 
-    async fn handle_signalling_message(self: &Arc<Self>, message: SignallingMessage) {
-        match message {
-            SignallingMessage::NewPeer { peer_id, routing } => {
+    async fn handle_signalling_message(self: &Arc<Self>, routed_message: RoutedSignallingMessage) {
+        match routed_message.message {
+            SignallingMessage::NewPeer { peer_id } => {
                 tracing::info!("New peer connected, peer_is: {}", peer_id);
                 self.conns_state.lock().await.peers.insert(peer_id, None);
 
                 // Build all to all network topology.
                 // If somebody joins network broadcasting itself, we should reply back only to that peer
                 // in order not to flood network with messages.
-                match routing {
-                    RoutingOptions::All => {
+                match routed_message.routing {
+                    Routing::Broadcast => {
                         if let Err(err) = self
-                            .send_signalling_message(SignallingMessage::NewPeer {
-                                routing: RoutingOptions::To(peer_id),
-                                peer_id: self.self_id,
+                            .send_signalling_message(RoutedSignallingMessage {
+                                routing: Routing::To(peer_id),
+                                message: SignallingMessage::NewPeer {
+                                    peer_id: self.self_id,
+                                },
                             })
                             .await
                         {
                             tracing::error!("Could not reply to new_peer message: {err}");
                         };
                     }
-                    RoutingOptions::To(peer_id) => {
-                        tracing::debug!("Got unicast new_peer message from: {peer_id}")
+                    Routing::To(peer_id) => {
+                        tracing::debug!("Got direct new_peer message from: {peer_id}")
                     }
                 }
             }
@@ -178,9 +180,12 @@ impl WebrtcTransport {
                     .insert(peer_id, Some(conn));
 
                 if let Err(err) = self
-                    .send_signalling_message(SignallingMessage::Answer {
-                        peer_id: self.self_id,
-                        sdp: answer,
+                    .send_signalling_message(RoutedSignallingMessage {
+                        routing: Routing::To(peer_id),
+                        message: SignallingMessage::Answer {
+                            peer_id: self.self_id,
+                            sdp: answer,
+                        },
                     })
                     .await
                 {
@@ -208,9 +213,11 @@ impl WebrtcTransport {
 
 impl WebrtcTransport {
     pub async fn join_peer_network(self: &Arc<Self>) -> Result<(), TransportErrors> {
-        self.send_signalling_message(SignallingMessage::NewPeer {
-            routing: RoutingOptions::All,
-            peer_id: self.self_id,
+        self.send_signalling_message(RoutedSignallingMessage {
+            routing: Routing::Broadcast,
+            message: SignallingMessage::NewPeer {
+                peer_id: self.self_id,
+            },
         })
         .await
     }
@@ -219,9 +226,12 @@ impl WebrtcTransport {
         self: &Arc<Self>,
         sdp: RTCSessionDescription,
     ) -> Result<(), TransportErrors> {
-        self.send_signalling_message(SignallingMessage::Offer {
-            peer_id: self.self_id,
-            sdp,
+        self.send_signalling_message(RoutedSignallingMessage {
+            routing: Routing::Broadcast,
+            message: SignallingMessage::Offer {
+                peer_id: self.self_id,
+                sdp,
+            },
         })
         .await
     }
@@ -239,7 +249,7 @@ impl WebrtcTransport {
             }
             _ = async {
                 while let Some(Ok(tungstenite::Message::Text(text))) = rx.next().await {
-                    if let Ok(message) = serde_json::from_str::<SignallingMessage>(&text) {
+                    if let Ok(message) = serde_json::from_str::<RoutedSignallingMessage>(&text) {
                         self.handle_signalling_message(message).await;
                     } else {
                         tracing::warn!("Failed to parse incoming message: {}", text);

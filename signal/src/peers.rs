@@ -3,7 +3,7 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 use webrtc_model::RoutedSignallingMessage;
-use webrtc_model::RoutingOptions;
+use webrtc_model::Routing;
 
 type PeersMap = Arc<RwLock<HashMap<Uuid, mpsc::Sender<String>>>>;
 
@@ -22,7 +22,7 @@ impl PeerManager {
     pub async fn add_peer(&self, id: Uuid, tx: mpsc::Sender<String>) {
         self.peers.write().await.insert(id, tx);
         self.send_message(RoutedSignallingMessage {
-            route: RoutingOptions::All,
+            routing: Routing::Broadcast,
             message: webrtc_model::SignallingMessage::NewPeer { peer_id: id },
         })
         .await;
@@ -32,7 +32,7 @@ impl PeerManager {
     pub async fn remove_peer(&self, id: &Uuid) {
         self.peers.write().await.remove(id);
         self.send_message(RoutedSignallingMessage {
-            route: RoutingOptions::All,
+            routing: Routing::Broadcast,
             message: webrtc_model::SignallingMessage::PeerLeft { peer_id: *id },
         })
         .await;
@@ -43,14 +43,14 @@ impl PeerManager {
         let peer_map = self.peers.read().await;
 
         match serde_json::to_string(&message) {
-            Ok(serialized_message) => match message.route {
-                RoutingOptions::All => {
+            Ok(serialized_message) => match message.routing {
+                Routing::Broadcast => {
                     futures::future::join_all(peer_map.iter().map(|(_, peer_sender)| async {
                         peer_sender.send(serialized_message.clone()).await;
                     }))
                     .await;
                 }
-                RoutingOptions::To(target_uuid) => {
+                Routing::To(target_uuid) => {
                     futures::future::join_all(
                         peer_map
                             .iter()
@@ -72,7 +72,7 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
     use tokio::time::{timeout, Duration};
-    use webrtc_model::{RoutingOptions, SignallingMessage};
+    use webrtc_model::{Routing, SignallingMessage};
 
     #[tokio::test]
     async fn test_new_peer_manager() {
@@ -117,9 +117,9 @@ mod tests {
             _ => panic!("Expected NewPeer message"),
         }
 
-        match parsed_message.route {
-            RoutingOptions::All => {}
-            _ => panic!("Expected All routing option"),
+        match parsed_message.routing {
+            Routing::Broadcast => {}
+            _ => panic!("Expected Broadcast routing option"),
         }
     }
 
@@ -190,7 +190,7 @@ mod tests {
         let _ = rx2.recv().await;
 
         let test_message = RoutedSignallingMessage {
-            route: RoutingOptions::All,
+            routing: Routing::Broadcast,
             message: SignallingMessage::NewPeer {
                 peer_id: Uuid::new_v4(),
             },
@@ -211,8 +211,8 @@ mod tests {
         let parsed1: RoutedSignallingMessage = serde_json::from_str(&msg1).unwrap();
         let parsed2: RoutedSignallingMessage = serde_json::from_str(&msg2).unwrap();
 
-        assert!(matches!(parsed1.route, RoutingOptions::All));
-        assert!(matches!(parsed2.route, RoutingOptions::All));
+        assert!(matches!(parsed1.routing, Routing::Broadcast));
+        assert!(matches!(parsed2.routing, Routing::Broadcast));
     }
 
     #[tokio::test]
@@ -231,7 +231,7 @@ mod tests {
         let _ = rx2.recv().await;
 
         let test_message = RoutedSignallingMessage {
-            route: RoutingOptions::To(peer_id1),
+            routing: Routing::To(peer_id1),
             message: SignallingMessage::NewPeer {
                 peer_id: Uuid::new_v4(),
             },
@@ -245,7 +245,7 @@ mod tests {
             .expect("Should receive a message");
 
         let parsed1: RoutedSignallingMessage = serde_json::from_str(&msg1).unwrap();
-        assert!(matches!(parsed1.route, RoutingOptions::To(id) if id == peer_id1));
+        assert!(matches!(parsed1.routing, Routing::To(id) if id == peer_id1));
 
         let result = timeout(Duration::from_millis(50), rx2.recv()).await;
         assert!(result.is_err(), "Peer2 should not receive any message");
@@ -257,7 +257,7 @@ mod tests {
         let nonexistent_id = Uuid::new_v4();
 
         let test_message = RoutedSignallingMessage {
-            route: RoutingOptions::To(nonexistent_id),
+            routing: Routing::To(nonexistent_id),
             message: SignallingMessage::NewPeer {
                 peer_id: Uuid::new_v4(),
             },
