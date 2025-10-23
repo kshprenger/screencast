@@ -10,7 +10,6 @@ pub struct Frame {
     pub data: Vec<u8>,
 }
 
-#[async_trait::async_trait]
 pub trait ScreenCapturer {
     fn new() -> Result<Self, VideoErrors>
     where

@@ -1,6 +1,5 @@
 use super::errors::VideoErrors;
 use super::{Frame, ScreenCapturer};
-use async_trait::async_trait;
 use tokio::sync::mpsc;
 use xcap::Monitor;
 
@@ -33,7 +32,6 @@ impl XCapCapturer {
     }
 }
 
-#[async_trait]
 impl ScreenCapturer for XCapCapturer {
     fn new() -> Result<Self, VideoErrors>
     where

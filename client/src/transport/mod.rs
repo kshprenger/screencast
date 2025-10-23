@@ -203,10 +203,6 @@ impl WebrtcTransport {
                     tracing::error!("Failed to set remote description: {:?}", err);
                 }
             }
-            SignallingMessage::IceCandidate { ice_candidate } => {
-                tracing::info!("Received ICE Candidate: {:?}", ice_candidate);
-                todo!();
-            }
         }
     }
 }
