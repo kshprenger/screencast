@@ -7,7 +7,7 @@ use webrtc::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Routing {
-    Broadcast,
+    BroadcastExcluding(Uuid),
     To(Uuid),
 }
 

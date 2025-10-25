@@ -22,18 +22,18 @@ impl PeerManager {
     pub async fn add_peer(&self, id: Uuid, tx: mpsc::Sender<String>) {
         self.peers.write().await.insert(id, tx);
         self.send_message(RoutedSignallingMessage {
-            routing: Routing::Broadcast,
+            routing: Routing::BroadcastExcluding(id),
             message: webrtc_model::SignallingMessage::NewPeer { peer_id: id },
         })
         .await;
         tracing::info!("Peer {id} connected ");
     }
 
-    pub async fn remove_peer(&self, id: &Uuid) {
-        self.peers.write().await.remove(id);
+    pub async fn remove_peer(&self, id: Uuid) {
+        self.peers.write().await.remove(&id);
         self.send_message(RoutedSignallingMessage {
-            routing: Routing::Broadcast,
-            message: webrtc_model::SignallingMessage::PeerLeft { peer_id: *id },
+            routing: Routing::BroadcastExcluding(id),
+            message: webrtc_model::SignallingMessage::PeerLeft { peer_id: id },
         })
         .await;
         tracing::info!("Peer {id} disconnected");
@@ -48,6 +48,17 @@ impl PeerManager {
                     futures::future::join_all(peer_map.iter().map(|(_, peer_sender)| async {
                         peer_sender.send(serialized_message.clone()).await;
                     }))
+                    .await;
+                }
+                Routing::BroadcastExcluding(excluded_uuid) => {
+                    futures::future::join_all(
+                        peer_map
+                            .iter()
+                            .filter(|(uuid, _)| **uuid != excluded_uuid)
+                            .map(|(_, peer_sender)| async {
+                                peer_sender.send(serialized_message.clone()).await
+                            }),
+                    )
                     .await;
                 }
                 Routing::To(target_uuid) => {
@@ -138,7 +149,7 @@ mod tests {
         let _ = rx1.recv().await;
         let _ = rx2.recv().await;
 
-        manager.remove_peer(&peer_id1).await;
+        manager.remove_peer(peer_id1).await;
 
         let peers = manager.peers.read().await;
         assert_eq!(peers.len(), 1);
@@ -168,7 +179,7 @@ mod tests {
         let manager = PeerManager::new();
         let peer_id = Uuid::new_v4();
 
-        manager.remove_peer(&peer_id).await;
+        manager.remove_peer(peer_id).await;
 
         let peers = manager.peers.read().await;
         assert!(peers.is_empty());
@@ -289,7 +300,7 @@ mod tests {
         }
 
         for peer_id in peer_ids.iter().take(3) {
-            manager.remove_peer(peer_id).await;
+            manager.remove_peer(*peer_id).await;
         }
 
         {

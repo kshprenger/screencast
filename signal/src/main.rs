@@ -63,7 +63,6 @@ async fn handle_socket(socket: WebSocket, peer_manager: PeerManager, id: Uuid) {
 
     peer_manager.add_peer(id, tx.clone()).await;
 
-    // Task to send messages from the mpsc channel to the WebSocket client
     let mut send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Err(err) = sender.send(Message::Text(msg)).await {
@@ -75,7 +74,6 @@ async fn handle_socket(socket: WebSocket, peer_manager: PeerManager, id: Uuid) {
 
     let peer_manager_clone = peer_manager.clone();
 
-    // Task to receive messages from the WebSocket client and broadcast them
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             match serde_json::from_str::<RoutedSignallingMessage>(&text) {
@@ -86,11 +84,12 @@ async fn handle_socket(socket: WebSocket, peer_manager: PeerManager, id: Uuid) {
         tracing::warn!("Done recv_task for {id}");
     });
 
-    // Wait for either task to complete and then cancel abort another one
+    // Wait for either task to complete and then abort another one
+    // in order to prevent leaks
     tokio::select! {
         _ = (&mut send_task) => recv_task.abort(),
         _ = (&mut recv_task) => send_task.abort(),
     };
 
-    peer_manager.remove_peer(&id).await;
+    peer_manager.remove_peer(id).await;
 }
