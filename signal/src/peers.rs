@@ -44,33 +44,21 @@ impl PeerManager {
 
         match serde_json::to_string(&message) {
             Ok(serialized_message) => match message.routing {
-                Routing::Broadcast => {
-                    futures::future::join_all(peer_map.iter().map(|(_, peer_sender)| async {
-                        peer_sender.send(serialized_message.clone()).await;
-                    }))
-                    .await;
-                }
                 Routing::BroadcastExcluding(excluded_uuid) => {
                     futures::future::join_all(
                         peer_map
                             .iter()
                             .filter(|(uuid, _)| **uuid != excluded_uuid)
                             .map(|(_, peer_sender)| async {
-                                peer_sender.send(serialized_message.clone()).await
+                                let _ = peer_sender.send(serialized_message.clone()).await;
                             }),
                     )
                     .await;
                 }
                 Routing::To(target_uuid) => {
-                    futures::future::join_all(
-                        peer_map
-                            .iter()
-                            .filter(|(uuid, _)| **uuid == target_uuid)
-                            .map(|(_, peer_sender)| async {
-                                peer_sender.send(serialized_message.clone()).await
-                            }),
-                    )
-                    .await;
+                    if let Some(peer_sender) = peer_map.get(&target_uuid) {
+                        let _ = peer_sender.send(serialized_message).await;
+                    }
                 }
             },
             Err(err) => tracing::error!("Could not serialize message: {err}"),
@@ -102,16 +90,25 @@ mod tests {
     #[tokio::test]
     async fn test_add_peer() {
         let manager = PeerManager::new();
-        let (tx, mut rx) = mpsc::channel::<String>(10);
-        let peer_id = Uuid::new_v4();
+        let (tx1, mut rx1) = mpsc::channel::<String>(10);
+        let (tx2, mut rx2) = mpsc::channel::<String>(10);
+        let peer_id1 = Uuid::new_v4();
+        let peer_id2 = Uuid::new_v4();
 
-        manager.add_peer(peer_id, tx).await;
+        manager.add_peer(peer_id1, tx1).await;
+
+        let result = timeout(Duration::from_millis(50), rx1.recv()).await;
+        assert!(result.is_err());
+
+        manager.add_peer(peer_id2, tx2).await;
 
         let peers = manager.peers.read().await;
-        assert_eq!(peers.len(), 1);
-        assert!(peers.contains_key(&peer_id));
+        assert_eq!(peers.len(), 2);
+        assert!(peers.contains_key(&peer_id1));
+        assert!(peers.contains_key(&peer_id2));
+        drop(peers);
 
-        let message = timeout(Duration::from_millis(100), rx.recv())
+        let message = timeout(Duration::from_millis(100), rx1.recv())
             .await
             .expect("Should receive message within timeout")
             .expect("Should receive a message");
@@ -123,15 +120,20 @@ mod tests {
             SignallingMessage::NewPeer {
                 peer_id: received_id,
             } => {
-                assert_eq!(received_id, peer_id);
+                assert_eq!(received_id, peer_id2);
             }
             _ => panic!("Expected NewPeer message"),
         }
 
         match parsed_message.routing {
-            Routing::Broadcast => {}
-            _ => panic!("Expected Broadcast routing option"),
+            Routing::BroadcastExcluding(excluded_id) => {
+                assert_eq!(excluded_id, peer_id2);
+            }
+            _ => panic!("Expected BroadcastExcluding routing option"),
         }
+
+        let result = timeout(Duration::from_millis(50), rx2.recv()).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -146,8 +148,6 @@ mod tests {
         manager.add_peer(peer_id2, tx2).await;
 
         let _ = rx1.recv().await;
-        let _ = rx1.recv().await;
-        let _ = rx2.recv().await;
 
         manager.remove_peer(peer_id1).await;
 
@@ -155,6 +155,7 @@ mod tests {
         assert_eq!(peers.len(), 1);
         assert!(!peers.contains_key(&peer_id1));
         assert!(peers.contains_key(&peer_id2));
+        drop(peers);
 
         let message = timeout(Duration::from_millis(100), rx2.recv())
             .await
@@ -186,44 +187,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_message_to_all() {
+    async fn test_send_message_broadcast_excluding() {
         let manager = PeerManager::new();
         let (tx1, mut rx1) = mpsc::channel::<String>(10);
         let (tx2, mut rx2) = mpsc::channel::<String>(10);
+        let (tx3, mut rx3) = mpsc::channel::<String>(10);
         let peer_id1 = Uuid::new_v4();
         let peer_id2 = Uuid::new_v4();
+        let peer_id3 = Uuid::new_v4();
 
         manager.add_peer(peer_id1, tx1).await;
         manager.add_peer(peer_id2, tx2).await;
+        manager.add_peer(peer_id3, tx3).await;
 
         let _ = rx1.recv().await;
         let _ = rx1.recv().await;
         let _ = rx2.recv().await;
 
         let test_message = RoutedSignallingMessage {
-            routing: Routing::Broadcast,
+            routing: Routing::BroadcastExcluding(peer_id2),
             message: SignallingMessage::NewPeer {
                 peer_id: Uuid::new_v4(),
             },
         };
 
-        manager.send_message(test_message.clone()).await;
+        manager.send_message(test_message).await;
 
         let msg1 = timeout(Duration::from_millis(100), rx1.recv())
             .await
             .expect("Should receive message within timeout")
             .expect("Should receive a message");
 
-        let msg2 = timeout(Duration::from_millis(100), rx2.recv())
+        let msg3 = timeout(Duration::from_millis(100), rx3.recv())
             .await
             .expect("Should receive message within timeout")
             .expect("Should receive a message");
 
         let parsed1: RoutedSignallingMessage = serde_json::from_str(&msg1).unwrap();
-        let parsed2: RoutedSignallingMessage = serde_json::from_str(&msg2).unwrap();
+        let parsed3: RoutedSignallingMessage = serde_json::from_str(&msg3).unwrap();
 
-        assert!(matches!(parsed1.routing, Routing::Broadcast));
-        assert!(matches!(parsed2.routing, Routing::Broadcast));
+        assert!(matches!(parsed1.routing, Routing::BroadcastExcluding(id) if id == peer_id2));
+        assert!(matches!(parsed3.routing, Routing::BroadcastExcluding(id) if id == peer_id2));
+
+        let result = timeout(Duration::from_millis(50), rx2.recv()).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -238,8 +245,6 @@ mod tests {
         manager.add_peer(peer_id2, tx2).await;
 
         let _ = rx1.recv().await;
-        let _ = rx1.recv().await;
-        let _ = rx2.recv().await;
 
         let test_message = RoutedSignallingMessage {
             routing: Routing::To(peer_id1),
@@ -259,7 +264,7 @@ mod tests {
         assert!(matches!(parsed1.routing, Routing::To(id) if id == peer_id1));
 
         let result = timeout(Duration::from_millis(50), rx2.recv()).await;
-        assert!(result.is_err(), "Peer2 should not receive any message");
+        assert!(result.is_err());
     }
 
     #[tokio::test]
