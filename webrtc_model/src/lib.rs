@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::{
+    ice_transport::ice_candidate::RTCIceCandidate,
+    peer_connection::sdp::session_description::RTCSessionDescription,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Routing {
@@ -12,11 +15,11 @@ pub enum Routing {
 #[serde(tag = "kind")]
 pub enum SignallingMessage {
     Offer {
-        peer_id: Uuid,
+        from: Uuid,
         sdp: RTCSessionDescription,
     },
     Answer {
-        peer_id: Uuid,
+        from: Uuid,
         sdp: RTCSessionDescription,
     },
     NewPeer {
@@ -24,6 +27,10 @@ pub enum SignallingMessage {
     },
     PeerLeft {
         peer_id: Uuid,
+    },
+    ICECandidate {
+        from: Uuid,
+        candidate: RTCIceCandidate,
     },
 }
 

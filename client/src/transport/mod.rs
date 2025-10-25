@@ -40,12 +40,7 @@ struct PeersState {
 impl WebrtcTransport {
     fn new(address: Ipv6Addr, port: u16) -> Arc<Self> {
         let ice_servers = vec![RTCIceServer {
-            urls: vec![
-                "stun:stun.l.google.com:19302".to_string(), // Backuping with 4 different servers
-                "stun:stun.l.google.com:5349".to_string(),
-                "stun:stun1.l.google.com:3478".to_string(),
-                "stun:stun1.l.google.com:5349".to_string(),
-            ],
+            urls: vec!["stun:stun.l.google.com:19302".to_string()],
             ..Default::default()
         }];
 
@@ -109,6 +104,34 @@ impl WebrtcTransport {
         Err(TransportErrors::ConnectionIsNotOpened)
     }
 
+    async fn setup_background_ice_candidates_transmitting(
+        self: &Arc<Self>,
+        conn: &RTCPeerConnection,
+        to: Uuid,
+    ) {
+        let self_clone1 = Arc::clone(self);
+        conn.on_ice_candidate(Box::new(move |candidate| {
+            let self_clone2 = Arc::clone(&self_clone1);
+            Box::pin(async move {
+                if let Some(candidate) = candidate {
+                    tracing::info!("Found ICE candidate: {candidate}");
+                    if let Err(err) = self_clone2
+                        .send_signalling_message(RoutedSignallingMessage {
+                            routing: Routing::To(to),
+                            message: SignallingMessage::ICECandidate { candidate },
+                        })
+                        .await
+                    {
+                        tracing::error!("Could not send ICE candidate to peer: {to}, {err}");
+                    }
+                } else {
+                    // None means ICE gathering is complete
+                    tracing::info!("ICE gathering completed");
+                }
+            })
+        }));
+    }
+
     async fn handle_signalling_message(self: &Arc<Self>, routed_message: RoutedSignallingMessage) {
         match routed_message.message {
             SignallingMessage::NewPeer { peer_id } => {
@@ -141,8 +164,8 @@ impl WebrtcTransport {
                 tracing::info!("Peer disconnected, peer_is: {}", peer_id);
                 self.conns_state.lock().await.peers.remove(&peer_id);
             }
-            SignallingMessage::Offer { peer_id, sdp } => {
-                tracing::info!("Received SDP Offer from peer:{peer_id}, offer:{:?}", sdp);
+            SignallingMessage::Offer { from, sdp } => {
+                tracing::info!("Received SDP Offer from peer:{from}, offer:{:?}", sdp);
                 let conn = match self
                     .webrtc_api
                     .new_peer_connection(self.default_config.clone())
@@ -154,6 +177,9 @@ impl WebrtcTransport {
                         return;
                     }
                 };
+
+                self.setup_background_ice_candidates_transmitting(&conn, from)
+                    .await;
 
                 if let Err(err) = conn.set_remote_description(sdp).await {
                     tracing::error!("Failed to set remote description: {}", err);
@@ -173,17 +199,13 @@ impl WebrtcTransport {
                     return;
                 }
 
-                self.conns_state
-                    .lock()
-                    .await
-                    .peers
-                    .insert(peer_id, Some(conn));
+                self.conns_state.lock().await.peers.insert(from, Some(conn));
 
                 if let Err(err) = self
                     .send_signalling_message(RoutedSignallingMessage {
-                        routing: Routing::To(peer_id),
+                        routing: Routing::To(from),
                         message: SignallingMessage::Answer {
-                            peer_id: self.self_id,
+                            from: self.self_id,
                             sdp: answer,
                         },
                     })
@@ -192,16 +214,25 @@ impl WebrtcTransport {
                     tracing::error!("Could not answer on offer: {}", err);
                 }
             }
-            SignallingMessage::Answer { peer_id, sdp } => {
+            SignallingMessage::Answer { from, sdp } => {
                 tracing::info!("Received SDP Answer: {:?}", sdp);
-                if let Err(err) = self.conns_state.lock().await.peers[&peer_id]
-                    .as_ref()
-                    .unwrap() // We receiving answer only after creating offer
-                    .set_remote_description(sdp)
-                    .await
-                {
+
+                let state = self.conns_state.lock().await;
+                let conn = state.peers[&from].as_ref().unwrap(); // We receiving answer only after creating offer
+
+                if let Err(err) = conn.set_remote_description(sdp).await {
                     tracing::error!("Failed to set remote description: {:?}", err);
+                    return;
                 }
+
+                self.setup_background_ice_candidates_transmitting(conn, peer_id)
+                    .await;
+            }
+            SignallingMessage::ICECandidate { from, candidate } => {
+                self.conns_state.lock().await.peers[&from]
+                    .unwrap()
+                    .add_ice_candidate(candidate)
+                    .await;
             }
         }
     }
