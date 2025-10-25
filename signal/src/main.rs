@@ -11,10 +11,10 @@ use futures_util::{sink::SinkExt, stream::StreamExt};
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use uuid::Uuid;
+use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
 mod config;
 mod peers;
-mod webrtc_model;
 
 use peers::PeerManager;
 
@@ -78,7 +78,10 @@ async fn handle_socket(socket: WebSocket, peer_manager: PeerManager, id: Uuid) {
     // Task to receive messages from the WebSocket client and broadcast them
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
-            peer_manager_clone.broadcast_message(id, text).await;
+            match serde_json::from_str::<RoutedSignallingMessage>(&text) {
+                Ok(message) => peer_manager_clone.send_message(message).await,
+                Err(err) => tracing::error!("Could not deserialize message: {err}"),
+            }
         }
         tracing::warn!("Done recv_task for {id}");
     });

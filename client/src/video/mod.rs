@@ -1,0 +1,18 @@
+mod errors;
+mod xcap;
+
+use errors::VideoErrors;
+
+#[derive(Debug)]
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
+}
+
+pub trait ScreenCapturer {
+    fn new() -> Result<Self, VideoErrors>
+    where
+        Self: Sized;
+    async fn start_capturing(&self) -> Result<tokio::sync::mpsc::Receiver<Frame>, VideoErrors>;
+}

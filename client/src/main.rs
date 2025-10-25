@@ -1,24 +1,35 @@
-use fs_extra::dir;
-use std::time::Instant;
-use xcap::Monitor;
+use clap::Parser;
+use tracing_subscriber::FmtSubscriber;
 
-fn normalized(filename: String) -> String {
-    filename.replace(['|', '\\', ':', '/'], "")
-}
+mod cli;
+mod gui;
+mod transport;
+mod video;
 
 fn main() {
-    let monitors = Monitor::all().unwrap();
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(tracing::Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    dir::create_all("target/monitors", true).unwrap();
+    let args = cli::Args::parse();
 
-    for monitor in monitors {
-        let image = monitor.capture_image().unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+    rt.block_on(async move {});
 
-        image
-            .save(format!(
-                "target/monitors/monitor-{}.png",
-                normalized(monitor.name().unwrap())
-            ))
-            .unwrap();
-    }
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([1080.0, 720.0]),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Screencast",
+        options,
+        Box::new(|cc| {
+            // This gives us image support
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+
+            Ok(Box::<gui::GUI>::default())
+        }),
+    );
 }
