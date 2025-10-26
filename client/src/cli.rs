@@ -2,7 +2,7 @@ use std::net::Ipv6Addr;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
-pub(super) struct Args {
+pub(super) struct Cli {
     #[arg(long, default_value_t = 35080)]
     pub(super) port: u16,
     #[arg(long)]

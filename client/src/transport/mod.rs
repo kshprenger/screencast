@@ -38,32 +38,6 @@ struct PeersState {
 }
 
 impl WebrtcTransport {
-    fn new(address: Ipv6Addr, port: u16) -> Arc<Self> {
-        let ice_servers = vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_string()],
-            ..Default::default()
-        }];
-
-        let config = RTCConfiguration {
-            ice_servers,
-            ..Default::default()
-        };
-
-        let api = APIBuilder::new().build();
-
-        Arc::new(Self {
-            signalling_server_address: address,
-            signalling_server_port: port,
-            self_id: Uuid::new_v4(),
-            webrtc_api: api,
-            default_config: config,
-            conns_state: RwLock::new(PeersState {
-                ws_tx: None,
-                peers: HashMap::new(),
-            }),
-        })
-    }
-
     async fn connect(self: &Arc<Self>) -> Result<WsRx, TransportErrors> {
         let url = format!(
             "ws://{}:{}/ws",
@@ -264,6 +238,32 @@ impl WebrtcTransport {
 }
 
 impl WebrtcTransport {
+    pub fn new_shared(address: Ipv6Addr, port: u16) -> Arc<Self> {
+        let ice_servers = vec![RTCIceServer {
+            urls: vec!["stun:stun.l.google.com:19302".to_string()],
+            ..Default::default()
+        }];
+
+        let config = RTCConfiguration {
+            ice_servers,
+            ..Default::default()
+        };
+
+        let api = APIBuilder::new().build();
+
+        Arc::new(Self {
+            signalling_server_address: address,
+            signalling_server_port: port,
+            self_id: Uuid::new_v4(),
+            webrtc_api: api,
+            default_config: config,
+            conns_state: RwLock::new(PeersState {
+                ws_tx: None,
+                peers: HashMap::new(),
+            }),
+        })
+    }
+
     pub async fn offer(
         self: &Arc<Self>,
         sdp: RTCSessionDescription,
@@ -294,7 +294,7 @@ impl WebrtcTransport {
                     if let Ok(message) = serde_json::from_str::<RoutedSignallingMessage>(&text) {
                         self.handle_signalling_message(message).await;
                     } else {
-                        tracing::warn!("Failed to parse incoming message: {text}");
+                        tracing::error!("Failed to parse incoming message: {text}");
                     }
                 }
                 tracing::warn!("Connection with signalling server was closed")

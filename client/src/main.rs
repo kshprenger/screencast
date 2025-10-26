@@ -12,7 +12,7 @@ fn main() {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let args = cli::Args::parse();
+    let args = cli::Cli::parse();
 
     let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
     rt.block_on(async move {});

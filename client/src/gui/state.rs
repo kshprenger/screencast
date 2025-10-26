@@ -1,1 +1,5 @@
-pub(super) enum State {}
+pub(super) enum GUIState {
+    Idle,
+    Streaming,
+    Watching,
+}
