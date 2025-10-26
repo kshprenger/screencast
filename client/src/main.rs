@@ -12,6 +12,7 @@ mod video;
 fn main() {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
+        .with_line_number(true)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
@@ -20,8 +21,14 @@ fn main() {
     let webrtc = transport::WebrtcTransport::new_shared(args.address, args.port);
     let webrtc_gui = Arc::clone(&webrtc);
 
-    let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-    rt.block_on(webrtc.join_peer_network(CancellationToken::new()));
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(webrtc.join_peer_network(CancellationToken::new()));
+    });
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1080.0, 720.0]),
