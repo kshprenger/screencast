@@ -14,7 +14,7 @@ pub(super) struct GUI {
 }
 
 impl GUI {
-    fn new(webrtc: Arc<WebrtcTransport>) -> Self {
+    pub fn new(webrtc: Arc<WebrtcTransport>) -> Self {
         GUI {
             frame_rx: None,
             state: GUIState::Idle,

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use clap::Parser;
 use tracing_subscriber::FmtSubscriber;
 
@@ -14,6 +16,8 @@ fn main() {
 
     let args = cli::Cli::parse();
 
+    let webrtc = transport::WebrtcTransport::new_shared(args.address, args.port);
+
     let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
     rt.block_on(async move {});
 
@@ -22,6 +26,8 @@ fn main() {
         ..Default::default()
     };
 
+    let webrtc_clone = Arc::clone(&webrtc);
+
     eframe::run_native(
         "Screencast",
         options,
@@ -29,7 +35,8 @@ fn main() {
             // This gives us image support
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Ok(Box::<gui::GUI>::default())
+            Ok(Box::new(gui::GUI::new(webrtc_clone)))
         }),
-    );
+    )
+    .unwrap();
 }
