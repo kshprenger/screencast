@@ -3,7 +3,7 @@ mod state;
 use std::sync::Arc;
 
 use eframe::egui;
-use tokio::sync::mpsc;
+use std::sync::mpsc;
 
 use crate::{
     gui::state::GUIState,
@@ -34,9 +34,15 @@ impl eframe::App for GUI {
                 if ui.button("Toggle stream").clicked() {
                     match self.state {
                         GUIState::Idle => match video::XCapCapturer::new() {
-                            Err(err) => tracing::error!("Could start stream: {err}"),
+                            Err(err) => {
+                                tracing::error!("Could start stream: {err}");
+                                return;
+                            }
                             Ok(capturer) => match capturer.start_capturing() {
-                                Err(err) => tracing::error!("Could start stream: {err}"),
+                                Err(err) => {
+                                    tracing::error!("Could start stream: {err}");
+                                    return;
+                                }
                                 Ok(frame_rx) => self.frame_rx = Some(frame_rx),
                             },
                         },
