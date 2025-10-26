@@ -294,7 +294,7 @@ impl WebrtcTransport {
                     if let Ok(message) = serde_json::from_str::<RoutedSignallingMessage>(&text) {
                         self.handle_signalling_message(message).await;
                     } else {
-                        tracing::warn!("Failed to parse incoming message: {}", text);
+                        tracing::warn!("Failed to parse incoming message: {text}");
                     }
                 }
             } => {}
