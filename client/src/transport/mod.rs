@@ -279,7 +279,7 @@ impl WebrtcTransport {
     }
 
     // Blocks
-    pub async fn connect_and_handle(
+    pub async fn join_peer_network(
         self: &Arc<Self>,
         ctx: tokio_util::sync::CancellationToken,
     ) -> Result<(), TransportErrors> {
@@ -289,7 +289,7 @@ impl WebrtcTransport {
             _ = ctx.cancelled() => {
                 tracing::warn!("Done singalling server handling routine");
             }
-            _ = async {
+            _ = async { // Little async trick
                 while let Some(Ok(tungstenite::Message::Text(text))) = rx.next().await {
                     if let Ok(message) = serde_json::from_str::<RoutedSignallingMessage>(&text) {
                         self.handle_signalling_message(message).await;
@@ -297,6 +297,7 @@ impl WebrtcTransport {
                         tracing::warn!("Failed to parse incoming message: {text}");
                     }
                 }
+                tracing::warn!("Connection with signalling server was closed")
             } => {}
         }
         Ok(())
