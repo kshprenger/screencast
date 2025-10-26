@@ -150,6 +150,8 @@ impl WebrtcTransport {
                 };
 
                 // What if peer does not know about us yet??
+                // Then will it loose our Ice candidate?????
+                // NerPeerAck????
                 self.setup_background_ice_candidates_transmitting(&conn, peer_id)
                     .await;
 
@@ -178,7 +180,7 @@ impl WebrtcTransport {
                 }
             }
             SignallingMessage::PeerLeft { peer_id } => {
-                tracing::info!("Peer disconnected, peer_is: {}", peer_id);
+                tracing::warn!("Peer {peer_id} disconnected");
                 self.conns_state.write().await.peers.remove(&peer_id);
             }
             SignallingMessage::Offer { from, sdp } => {
@@ -190,7 +192,7 @@ impl WebrtcTransport {
                     Some(conn) => conn,
                     None => {
                         tracing::warn!(
-                            "Could find peer that offers. Possible it have disconnected before"
+                            "Could find peer that offers. Possibly it have disconnected before"
                         );
                         return;
                     }
@@ -236,7 +238,7 @@ impl WebrtcTransport {
                     Some(conn) => conn,
                     None => {
                         tracing::warn!(
-                            "Could find peer that offers. Possible it have disconnected before"
+                            "Could find peer that offers. Possibly it have disconnected before"
                         );
                         return;
                     }
