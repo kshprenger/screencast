@@ -1,3 +1,4 @@
+use futures_util::future;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
@@ -45,7 +46,7 @@ impl PeerManager {
         match serde_json::to_string(&message) {
             Ok(serialized_message) => match message.routing {
                 Routing::BroadcastExcluding(excluded_uuid) => {
-                    futures::future::join_all(
+                    future::join_all(
                         peer_map
                             .iter()
                             .filter(|(uuid, _)| **uuid != excluded_uuid)

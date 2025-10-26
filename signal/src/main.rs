@@ -11,7 +11,7 @@ use futures_util::{sink::SinkExt, stream::StreamExt};
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
+use webrtc_model::RoutedSignallingMessage;
 
 mod config;
 mod peers;
