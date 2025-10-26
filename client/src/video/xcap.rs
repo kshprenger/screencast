@@ -1,6 +1,6 @@
 use super::errors::VideoErrors;
 use super::{Frame, ScreenCapturer};
-use tokio::sync::mpsc;
+use std::sync::mpsc;
 use xcap::Monitor;
 
 // 10 seconds in 60 fps
@@ -44,11 +44,11 @@ impl ScreenCapturer for XCapCapturer {
         }
     }
 
-    async fn start_capturing(&self) -> Result<mpsc::Receiver<Frame>, VideoErrors> {
+    fn start_capturing(&self) -> Result<mpsc::Receiver<Frame>, VideoErrors> {
         match self.monitor.video_recorder() {
             Ok((_, xcap_frame_rx)) => {
-                let (frame_tx, frame_rx) = mpsc::channel::<Frame>(FRAME_BUFFER_SIZE);
-                tokio::task::spawn_blocking(move || loop {
+                let (frame_tx, frame_rx) = mpsc::sync_channel::<Frame>(FRAME_BUFFER_SIZE);
+                std::thread::spawn(move || loop {
                     match xcap_frame_rx.recv() {
                         Ok(frame) => {
                             let new_frame = Frame {
@@ -56,7 +56,7 @@ impl ScreenCapturer for XCapCapturer {
                                 height: frame.height,
                                 data: frame.raw,
                             };
-                            if let Err(_) = frame_tx.blocking_send(new_frame) {
+                            if let Err(_) = frame_tx.send(new_frame) {
                                 tracing::warn!("Frame rx is closed. Terminating task.");
                                 return;
                             }

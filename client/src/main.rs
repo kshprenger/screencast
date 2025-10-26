@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::FmtSubscriber;
 
 mod cli;
@@ -17,16 +18,15 @@ fn main() {
     let args = cli::Cli::parse();
 
     let webrtc = transport::WebrtcTransport::new_shared(args.address, args.port);
+    let webrtc_gui = Arc::clone(&webrtc);
 
     let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-    rt.block_on(async move {});
+    rt.block_on(webrtc.join_peer_network(CancellationToken::new()));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1080.0, 720.0]),
         ..Default::default()
     };
-
-    let webrtc_clone = Arc::clone(&webrtc);
 
     eframe::run_native(
         "Screencast",
@@ -35,7 +35,7 @@ fn main() {
             // This gives us image support
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Ok(Box::new(gui::GUI::new(webrtc_clone)))
+            Ok(Box::new(gui::GUI::new(webrtc_gui)))
         }),
     )
     .unwrap();
