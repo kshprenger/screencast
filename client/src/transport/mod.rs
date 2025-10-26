@@ -149,6 +149,10 @@ impl WebrtcTransport {
                     }
                 };
 
+                // What if peer does not know about us yet??
+                self.setup_background_ice_candidates_transmitting(&conn, peer_id)
+                    .await;
+
                 self.conns_state.write().await.peers.insert(peer_id, conn);
 
                 // Build all to all network topology.
@@ -191,9 +195,6 @@ impl WebrtcTransport {
                         return;
                     }
                 };
-
-                self.setup_background_ice_candidates_transmitting(conn, from)
-                    .await;
 
                 if let Err(err) = conn.set_remote_description(sdp).await {
                     tracing::error!("Failed to set remote description: {}", err);
@@ -245,17 +246,14 @@ impl WebrtcTransport {
                     tracing::error!("Failed to set remote description: {:?}", err);
                     return;
                 }
-
-                self.setup_background_ice_candidates_transmitting(conn, from)
-                    .await;
             }
             SignallingMessage::ICECandidate { from, candidate } => {
                 match self.conns_state.read().await.peers.get(&from) {
                     Some(peer) => {
-                        peer.add_ice_candidate(candidate.to_json().unwrap()).await;
+                        let _ = peer.add_ice_candidate(candidate.to_json().unwrap()).await;
                     }
                     None => tracing::warn!(
-                        "Could find peer that offers. Possible it have disconnected before"
+                        "Could not add Ice candidate because there is no connection with {from}"
                     ),
                 }
             }
