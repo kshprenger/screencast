@@ -266,22 +266,40 @@ impl WebrtcTransport {
         })
     }
 
-    pub async fn offer(
-        self: &Arc<Self>,
-        sdp: RTCSessionDescription,
-    ) -> Result<(), TransportErrors> {
-        self.send_signalling_message(RoutedSignallingMessage {
-            routing: Routing::BroadcastExcluding(self.self_id),
-            message: SignallingMessage::Offer {
-                from: self.self_id,
-                sdp,
-            },
-        })
-        .await
+    pub async fn create_and_send_offers(self: Arc<Self>) {
+        let peers_state = self.conns_state.read().await;
+
+        for (&peer_id, conn) in &peers_state.peers {
+            let offer = match conn.create_offer(None).await {
+                Ok(offer) => offer,
+                Err(err) => {
+                    tracing::error!("Failed to create offer for peer {peer_id}: {err}");
+                    continue;
+                }
+            };
+
+            if let Err(err) = conn.set_local_description(offer.clone()).await {
+                tracing::error!("Failed to set local description for peer {peer_id}: {err}");
+                continue;
+            }
+
+            if let Err(err) = self
+                .send_signalling_message(RoutedSignallingMessage {
+                    routing: Routing::To(peer_id),
+                    message: SignallingMessage::Offer {
+                        from: self.self_id,
+                        sdp: offer,
+                    },
+                })
+                .await
+            {
+                tracing::error!("Failed to send offer to peer {peer_id}: {err}");
+            }
+        }
     }
 
     // Blocks
-    pub async fn join_peer_network(self: &Arc<Self>, ctx: tokio_util::sync::CancellationToken) {
+    pub async fn join_peer_network(self: &Arc<Self>) {
         let mut retry_delay = Duration::from_millis(100);
         let max_delay = Duration::from_secs(2);
         let backoff_multiplier = 2.0;
@@ -292,38 +310,28 @@ impl WebrtcTransport {
                     // Reset retry delay on successful connection
                     retry_delay = Duration::from_millis(100);
 
-                    let ctx_clone = ctx.clone();
-                    tokio::select! {
-                        biased;
-                        _ = ctx_clone.cancelled() => {
-                            tracing::warn!("Done signalling server handling routine");
-                            return;
-                        }
-                        result = async {
-                            while let Some(msg_result) = rx.next().await {
-                                match msg_result {
-                                    Ok(tungstenite::Message::Text(text)) => {
-                                        if let Ok(message) = serde_json::from_str::<RoutedSignallingMessage>(&text) {
-                                            self.handle_signalling_message(message).await;
-                                        } else {
-                                            tracing::error!("Failed to parse incoming message: {text}");
-                                        }
-                                    }
-                                    Ok(tungstenite::Message::Close(_)) => {
-                                        tracing::warn!("WebSocket connection closed by server");
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("WebSocket error: {e}");
-                                        break;
-                                    }
-                                    _ => {} // Ignore other message types
+                    while let Some(msg_result) = rx.next().await {
+                        match msg_result {
+                            Ok(tungstenite::Message::Text(text)) => {
+                                if let Ok(message) =
+                                    serde_json::from_str::<RoutedSignallingMessage>(&text)
+                                {
+                                    self.handle_signalling_message(message).await;
+                                } else {
+                                    tracing::error!("Failed to parse incoming message: {text}");
                                 }
                             }
-                            tracing::warn!("Connection with signalling server was closed");
-                        } => result
-                    };
-
+                            Ok(tungstenite::Message::Close(_)) => {
+                                tracing::warn!("WebSocket connection closed by server");
+                                break;
+                            }
+                            Err(e) => {
+                                tracing::error!("WebSocket error: {e}");
+                                break;
+                            }
+                            _ => {} // Ignore other message types
+                        }
+                    }
                     tracing::info!("Connection lost, retrying in {:?}", retry_delay);
                 }
                 Err(e) => {
@@ -334,16 +342,8 @@ impl WebrtcTransport {
                 }
             }
 
-            // Wait before retrying, but check for cancellation
-            tokio::select! {
-                _ = ctx.cancelled() => {
-                    tracing::warn!("Done signalling server handling routine");
-                    return;
-                }
-                _ = sleep(retry_delay) => {}
-            }
+            sleep(retry_delay).await;
 
-            // Exponential backoff with cap at max_delay
             retry_delay = std::cmp::min(
                 Duration::from_millis((retry_delay.as_millis() as f64 * backoff_multiplier) as u64),
                 max_delay,
