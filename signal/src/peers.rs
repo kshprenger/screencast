@@ -23,8 +23,8 @@ impl PeerManager {
     pub async fn add_peer(&self, id: Uuid, tx: mpsc::Sender<String>) {
         self.peers.write().await.insert(id, tx);
         self.send_message(RoutedSignallingMessage {
-            routing: Routing::BroadcastExcluding(id),
-            message: webrtc_model::SignallingMessage::NewPeer { peer_id: id },
+            routing: Routing::BroadcastFrom(id),
+            message: webrtc_model::SignallingMessage::NewPeer,
         })
         .await;
         tracing::info!("Peer {id} connected ");
@@ -33,8 +33,8 @@ impl PeerManager {
     pub async fn remove_peer(&self, id: Uuid) {
         self.peers.write().await.remove(&id);
         self.send_message(RoutedSignallingMessage {
-            routing: Routing::BroadcastExcluding(id),
-            message: webrtc_model::SignallingMessage::PeerLeft { peer_id: id },
+            routing: Routing::BroadcastFrom(id),
+            message: webrtc_model::SignallingMessage::PeerLeft,
         })
         .await;
         tracing::info!("Peer {id} disconnected");
@@ -45,7 +45,7 @@ impl PeerManager {
 
         match serde_json::to_string(&message) {
             Ok(serialized_message) => match message.routing {
-                Routing::BroadcastExcluding(excluded_uuid) => {
+                Routing::BroadcastFrom(excluded_uuid) => {
                     future::join_all(
                         peer_map
                             .iter()
@@ -56,7 +56,7 @@ impl PeerManager {
                     )
                     .await;
                 }
-                Routing::To(target_uuid) => {
+                Routing::To(target_uuid, _) => {
                     if let Some(peer_sender) = peer_map.get(&target_uuid) {
                         let _ = peer_sender.send(serialized_message).await;
                     }
@@ -118,19 +118,17 @@ mod tests {
             serde_json::from_str(&message).expect("Should deserialize message");
 
         match parsed_message.message {
-            SignallingMessage::NewPeer {
-                peer_id: received_id,
-            } => {
-                assert_eq!(received_id, peer_id2);
+            SignallingMessage::NewPeer => {
+                // NewPeer doesn't contain peer_id, it's in the routing
             }
             _ => panic!("Expected NewPeer message"),
         }
 
         match parsed_message.routing {
-            Routing::BroadcastExcluding(excluded_id) => {
+            Routing::BroadcastFrom(excluded_id) => {
                 assert_eq!(excluded_id, peer_id2);
             }
-            _ => panic!("Expected BroadcastExcluding routing option"),
+            _ => panic!("Expected BroadcastFrom routing option"),
         }
 
         let result = timeout(Duration::from_millis(50), rx2.recv()).await;
@@ -167,10 +165,8 @@ mod tests {
             serde_json::from_str(&message).expect("Should deserialize message");
 
         match parsed_message.message {
-            SignallingMessage::PeerLeft {
-                peer_id: received_id,
-            } => {
-                assert_eq!(received_id, peer_id1);
+            SignallingMessage::PeerLeft => {
+                // PeerLeft doesn't contain peer_id, it's in the routing
             }
             _ => panic!("Expected PeerLeft message"),
         }
@@ -206,10 +202,8 @@ mod tests {
         let _ = rx2.recv().await;
 
         let test_message = RoutedSignallingMessage {
-            routing: Routing::BroadcastExcluding(peer_id2),
-            message: SignallingMessage::NewPeer {
-                peer_id: Uuid::new_v4(),
-            },
+            routing: Routing::BroadcastFrom(peer_id2),
+            message: SignallingMessage::NewPeer,
         };
 
         manager.send_message(test_message).await;
@@ -227,8 +221,8 @@ mod tests {
         let parsed1: RoutedSignallingMessage = serde_json::from_str(&msg1).unwrap();
         let parsed3: RoutedSignallingMessage = serde_json::from_str(&msg3).unwrap();
 
-        assert!(matches!(parsed1.routing, Routing::BroadcastExcluding(id) if id == peer_id2));
-        assert!(matches!(parsed3.routing, Routing::BroadcastExcluding(id) if id == peer_id2));
+        assert!(matches!(parsed1.routing, Routing::BroadcastFrom(id) if id == peer_id2));
+        assert!(matches!(parsed3.routing, Routing::BroadcastFrom(id) if id == peer_id2));
 
         let result = timeout(Duration::from_millis(50), rx2.recv()).await;
         assert!(result.is_err());
@@ -248,10 +242,8 @@ mod tests {
         let _ = rx1.recv().await;
 
         let test_message = RoutedSignallingMessage {
-            routing: Routing::To(peer_id1),
-            message: SignallingMessage::NewPeer {
-                peer_id: Uuid::new_v4(),
-            },
+            routing: Routing::To(peer_id1, peer_id2),
+            message: SignallingMessage::NewPeer,
         };
 
         manager.send_message(test_message).await;
@@ -262,7 +254,7 @@ mod tests {
             .expect("Should receive a message");
 
         let parsed1: RoutedSignallingMessage = serde_json::from_str(&msg1).unwrap();
-        assert!(matches!(parsed1.routing, Routing::To(id) if id == peer_id1));
+        assert!(matches!(parsed1.routing, Routing::To(to_id, _) if to_id == peer_id1));
 
         let result = timeout(Duration::from_millis(50), rx2.recv()).await;
         assert!(result.is_err());
@@ -274,10 +266,8 @@ mod tests {
         let nonexistent_id = Uuid::new_v4();
 
         let test_message = RoutedSignallingMessage {
-            routing: Routing::To(nonexistent_id),
-            message: SignallingMessage::NewPeer {
-                peer_id: Uuid::new_v4(),
-            },
+            routing: Routing::To(nonexistent_id, Uuid::new_v4()),
+            message: SignallingMessage::NewPeer,
         };
 
         manager.send_message(test_message).await;

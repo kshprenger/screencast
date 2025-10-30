@@ -94,8 +94,8 @@ impl WebrtcTransport {
                     tracing::info!("Found ICE candidate: {candidate}");
                     if let Err(err) = self_clone2
                         .send_signalling_message(RoutedSignallingMessage {
-                            routing: Routing::To(to),
-                            message: SignallingMessage::ICECandidate { from, candidate },
+                            routing: Routing::To(to, from),
+                            message: SignallingMessage::ICECandidate { candidate },
                         })
                         .await
                     {
@@ -109,9 +109,14 @@ impl WebrtcTransport {
     }
 
     async fn handle_signalling_message(self: &Arc<Self>, routed_message: RoutedSignallingMessage) {
+        let from = match routed_message.routing {
+            Routing::BroadcastFrom(from) => from,
+            Routing::To(_, from) => from,
+        };
+
         match routed_message.message {
-            SignallingMessage::NewPeer { peer_id } => {
-                tracing::info!("New peer connected, peer_id: {peer_id}");
+            SignallingMessage::NewPeer => {
+                tracing::info!("New peer connected, peer_id: {from}");
 
                 let conn = match self
                     .webrtc_api
@@ -126,40 +131,38 @@ impl WebrtcTransport {
                 };
 
                 // What if peer does not know about us yet??
-                // Then will it loose our Ice candidate?????
-                // NerPeerAck????
-                self.setup_background_ice_candidates_transmitting(&conn, peer_id)
+                // Then will it lose our Ice candidate?????
+                // NewPeerAck????
+                self.setup_background_ice_candidates_transmitting(&conn, from)
                     .await;
 
-                self.conns_state.write().await.peers.insert(peer_id, conn);
+                self.conns_state.write().await.peers.insert(from, conn);
 
                 // Build all to all network topology.
                 // If somebody joins network broadcasting itself, we should reply back only to that peer
                 // in order not to flood network with messages.
                 match routed_message.routing {
-                    Routing::BroadcastExcluding(_) => {
+                    Routing::BroadcastFrom(_) => {
                         if let Err(err) = self
                             .send_signalling_message(RoutedSignallingMessage {
-                                routing: Routing::To(peer_id),
-                                message: SignallingMessage::NewPeer {
-                                    peer_id: self.self_id,
-                                },
+                                routing: Routing::To(from, self.self_id),
+                                message: SignallingMessage::NewPeer,
                             })
                             .await
                         {
                             tracing::error!("Could not reply to new_peer message: {err}");
                         };
                     }
-                    Routing::To(peer_id) => {
-                        tracing::debug!("Got direct new_peer message from: {peer_id}")
+                    Routing::To(_, _) => {
+                        tracing::debug!("Got direct new_peer message from: {from}")
                     }
                 }
             }
-            SignallingMessage::PeerLeft { peer_id } => {
-                tracing::warn!("Peer {peer_id} disconnected");
-                self.conns_state.write().await.peers.remove(&peer_id);
+            SignallingMessage::PeerLeft => {
+                tracing::warn!("Peer {from} disconnected");
+                self.conns_state.write().await.peers.remove(&from);
             }
-            SignallingMessage::Offer { from, sdp } => {
+            SignallingMessage::Offer { sdp } => {
                 tracing::info!("Received SDP Offer from peer:{from}, offer:{:?}", sdp);
 
                 let state = self.conns_state.read().await;
@@ -194,19 +197,16 @@ impl WebrtcTransport {
 
                 if let Err(err) = self
                     .send_signalling_message(RoutedSignallingMessage {
-                        routing: Routing::To(from),
-                        message: SignallingMessage::Answer {
-                            from: self.self_id,
-                            sdp: answer,
-                        },
+                        routing: Routing::To(from, self.self_id),
+                        message: SignallingMessage::Answer { sdp: answer },
                     })
                     .await
                 {
                     tracing::error!("Could not answer on offer: {}", err);
                 }
             }
-            SignallingMessage::Answer { from, sdp } => {
-                tracing::info!("Received SDP Answer: {:?}", sdp);
+            SignallingMessage::Answer { sdp } => {
+                tracing::info!("Received SDP Answer from: {from}, answer: {:?}", sdp);
 
                 let state = self.conns_state.read().await;
 
@@ -225,7 +225,7 @@ impl WebrtcTransport {
                     return;
                 }
             }
-            SignallingMessage::ICECandidate { from, candidate } => {
+            SignallingMessage::ICECandidate { candidate } => {
                 match self.conns_state.read().await.peers.get(&from) {
                     Some(peer) => {
                         let _ = peer.add_ice_candidate(candidate.to_json().unwrap()).await;
@@ -285,11 +285,8 @@ impl WebrtcTransport {
 
             if let Err(err) = self
                 .send_signalling_message(RoutedSignallingMessage {
-                    routing: Routing::To(peer_id),
-                    message: SignallingMessage::Offer {
-                        from: self.self_id,
-                        sdp: offer,
-                    },
+                    routing: Routing::To(peer_id, self.self_id),
+                    message: SignallingMessage::Offer { sdp: offer },
                 })
                 .await
             {

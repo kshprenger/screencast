@@ -7,31 +7,18 @@ use webrtc::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Routing {
-    BroadcastExcluding(Uuid),
-    To(Uuid),
+    BroadcastFrom(Uuid),
+    To(Uuid, Uuid), // To, from
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "kind")]
 pub enum SignallingMessage {
-    Offer {
-        from: Uuid,
-        sdp: RTCSessionDescription,
-    },
-    Answer {
-        from: Uuid,
-        sdp: RTCSessionDescription,
-    },
-    NewPeer {
-        peer_id: Uuid,
-    },
-    PeerLeft {
-        peer_id: Uuid,
-    },
-    ICECandidate {
-        from: Uuid,
-        candidate: RTCIceCandidate,
-    },
+    NewPeer,
+    PeerLeft,
+    Offer { sdp: RTCSessionDescription },
+    Answer { sdp: RTCSessionDescription },
+    ICECandidate { candidate: RTCIceCandidate },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
