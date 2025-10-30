@@ -11,7 +11,7 @@ use futures_util::{sink::SinkExt, stream::StreamExt};
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use webrtc_model::RoutedSignallingMessage;
+use webrtc_model::{add_from, RoutedSignallingMessage};
 
 mod config;
 mod peers;
@@ -53,7 +53,7 @@ async fn ws_handler(
     State(peer_manager): State<PeerManager>,
 ) -> impl IntoResponse {
     let id = Uuid::new_v4();
-    tracing::info!("New peer connected: {}", id);
+    tracing::info!("New peer connected: {id}");
     ws.on_upgrade(move |socket| handle_socket(socket, peer_manager, id))
 }
 
@@ -77,7 +77,10 @@ async fn handle_socket(socket: WebSocket, peer_manager: PeerManager, id: Uuid) {
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             match serde_json::from_str::<RoutedSignallingMessage>(&text) {
-                Ok(message) => peer_manager_clone.send_message(message).await,
+                Ok(mut message) => {
+                    message.routing = add_from(message.routing, id);
+                    peer_manager_clone.send_message(message).await;
+                }
                 Err(err) => tracing::error!("Could not deserialize message: {err}"),
             }
         }

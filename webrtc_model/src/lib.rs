@@ -7,8 +7,13 @@ use webrtc::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Routing {
-    BroadcastFrom(Uuid),
-    To(Uuid, Uuid), // To, from
+    Broadcast,
+    To(Uuid),
+    From(Box<Routing>, Uuid),
+}
+
+pub fn add_from(routing: Routing, from: Uuid) -> Routing {
+    Routing::From(Box::new(routing), from)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

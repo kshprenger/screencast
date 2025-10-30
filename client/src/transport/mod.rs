@@ -18,7 +18,6 @@ use uuid::Uuid;
 use webrtc::api::{APIBuilder, API};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
@@ -28,7 +27,6 @@ type WsRx = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 pub struct WebrtcTransport {
     signalling_server_address: Ipv6Addr,
     signalling_server_port: u16,
-    self_id: Uuid,
     webrtc_api: API,
     default_config: RTCConfiguration,
     conns_state: RwLock<PeersState>,
@@ -86,7 +84,6 @@ impl WebrtcTransport {
         to: Uuid,
     ) {
         let self_clone1 = Arc::clone(self);
-        let from = self.self_id;
         conn.on_ice_candidate(Box::new(move |candidate| {
             let self_clone2 = Arc::clone(&self_clone1);
             Box::pin(async move {
@@ -94,7 +91,7 @@ impl WebrtcTransport {
                     tracing::info!("Found ICE candidate: {candidate}");
                     if let Err(err) = self_clone2
                         .send_signalling_message(RoutedSignallingMessage {
-                            routing: Routing::To(to, from),
+                            routing: Routing::To(to),
                             message: SignallingMessage::ICECandidate { candidate },
                         })
                         .await
@@ -109,9 +106,9 @@ impl WebrtcTransport {
     }
 
     async fn handle_signalling_message(self: &Arc<Self>, routed_message: RoutedSignallingMessage) {
-        let from = match routed_message.routing {
-            Routing::BroadcastFrom(from) => from,
-            Routing::To(_, from) => from,
+        let (inner_routing, from) = match routed_message.routing {
+            Routing::From(inner_routing, from) => (*inner_routing, from),
+            _ => unreachable!(),
         };
 
         match routed_message.message {
@@ -141,11 +138,11 @@ impl WebrtcTransport {
                 // Build all to all network topology.
                 // If somebody joins network broadcasting itself, we should reply back only to that peer
                 // in order not to flood network with messages.
-                match routed_message.routing {
-                    Routing::BroadcastFrom(_) => {
+                match inner_routing {
+                    Routing::Broadcast => {
                         if let Err(err) = self
                             .send_signalling_message(RoutedSignallingMessage {
-                                routing: Routing::To(from, self.self_id),
+                                routing: Routing::To(from),
                                 message: SignallingMessage::NewPeer,
                             })
                             .await
@@ -153,9 +150,10 @@ impl WebrtcTransport {
                             tracing::error!("Could not reply to new_peer message: {err}");
                         };
                     }
-                    Routing::To(_, _) => {
+                    Routing::To(_) => {
                         tracing::debug!("Got direct new_peer message from: {from}")
                     }
+                    _ => unreachable!(),
                 }
             }
             SignallingMessage::PeerLeft => {
@@ -197,7 +195,7 @@ impl WebrtcTransport {
 
                 if let Err(err) = self
                     .send_signalling_message(RoutedSignallingMessage {
-                        routing: Routing::To(from, self.self_id),
+                        routing: Routing::To(from),
                         message: SignallingMessage::Answer { sdp: answer },
                     })
                     .await
@@ -256,7 +254,6 @@ impl WebrtcTransport {
         Arc::new(Self {
             signalling_server_address: address,
             signalling_server_port: port,
-            self_id: Uuid::new_v4(),
             webrtc_api: api,
             default_config: config,
             conns_state: RwLock::new(PeersState {
@@ -285,7 +282,7 @@ impl WebrtcTransport {
 
             if let Err(err) = self
                 .send_signalling_message(RoutedSignallingMessage {
-                    routing: Routing::To(peer_id, self.self_id),
+                    routing: Routing::To(peer_id),
                     message: SignallingMessage::Offer { sdp: offer },
                 })
                 .await

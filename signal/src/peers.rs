@@ -3,8 +3,10 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use webrtc_model::add_from;
 use webrtc_model::RoutedSignallingMessage;
 use webrtc_model::Routing;
+use webrtc_model::SignallingMessage;
 
 type PeersMap = Arc<RwLock<HashMap<Uuid, mpsc::Sender<String>>>>;
 
@@ -23,7 +25,7 @@ impl PeerManager {
     pub async fn add_peer(&self, id: Uuid, tx: mpsc::Sender<String>) {
         self.peers.write().await.insert(id, tx);
         self.send_message(RoutedSignallingMessage {
-            routing: Routing::BroadcastFrom(id),
+            routing: add_from(Routing::Broadcast, id),
             message: webrtc_model::SignallingMessage::NewPeer,
         })
         .await;
@@ -33,8 +35,8 @@ impl PeerManager {
     pub async fn remove_peer(&self, id: Uuid) {
         self.peers.write().await.remove(&id);
         self.send_message(RoutedSignallingMessage {
-            routing: Routing::BroadcastFrom(id),
-            message: webrtc_model::SignallingMessage::PeerLeft,
+            routing: add_from(Routing::Broadcast, id),
+            message: SignallingMessage::PeerLeft,
         })
         .await;
         tracing::info!("Peer {id} disconnected");
@@ -45,22 +47,23 @@ impl PeerManager {
 
         match serde_json::to_string(&message) {
             Ok(serialized_message) => match message.routing {
-                Routing::BroadcastFrom(excluded_uuid) => {
-                    future::join_all(
-                        peer_map
-                            .iter()
-                            .filter(|(uuid, _)| **uuid != excluded_uuid)
-                            .map(|(_, peer_sender)| async {
+                Routing::From(inner_routing, from) => match *inner_routing {
+                    Routing::Broadcast => {
+                        future::join_all(peer_map.iter().filter(|(uuid, _)| **uuid != from).map(
+                            |(_, peer_sender)| async {
                                 let _ = peer_sender.send(serialized_message.clone()).await;
-                            }),
-                    )
-                    .await;
-                }
-                Routing::To(target_uuid, _) => {
-                    if let Some(peer_sender) = peer_map.get(&target_uuid) {
-                        let _ = peer_sender.send(serialized_message).await;
+                            },
+                        ))
+                        .await;
                     }
-                }
+                    Routing::To(target_uuid) => {
+                        if let Some(peer_sender) = peer_map.get(&target_uuid) {
+                            let _ = peer_sender.send(serialized_message).await;
+                        }
+                    }
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
             },
             Err(err) => tracing::error!("Could not serialize message: {err}"),
         }
@@ -125,10 +128,16 @@ mod tests {
         }
 
         match parsed_message.routing {
-            Routing::BroadcastFrom(excluded_id) => {
-                assert_eq!(excluded_id, peer_id2);
+            Routing::From(inner_routing, from_id) => {
+                assert_eq!(from_id, peer_id2);
+                match *inner_routing {
+                    Routing::Broadcast => {
+                        // This is correct - broadcast from peer_id2
+                    }
+                    _ => panic!("Expected inner Broadcast routing"),
+                }
             }
-            _ => panic!("Expected BroadcastFrom routing option"),
+            _ => panic!("Expected From routing with Broadcast"),
         }
 
         let result = timeout(Duration::from_millis(50), rx2.recv()).await;
@@ -202,7 +211,7 @@ mod tests {
         let _ = rx2.recv().await;
 
         let test_message = RoutedSignallingMessage {
-            routing: Routing::BroadcastFrom(peer_id2),
+            routing: Routing::From(Box::new(Routing::Broadcast), peer_id2),
             message: SignallingMessage::NewPeer,
         };
 
@@ -221,8 +230,12 @@ mod tests {
         let parsed1: RoutedSignallingMessage = serde_json::from_str(&msg1).unwrap();
         let parsed3: RoutedSignallingMessage = serde_json::from_str(&msg3).unwrap();
 
-        assert!(matches!(parsed1.routing, Routing::BroadcastFrom(id) if id == peer_id2));
-        assert!(matches!(parsed3.routing, Routing::BroadcastFrom(id) if id == peer_id2));
+        assert!(
+            matches!(parsed1.routing, Routing::From(ref inner, id) if matches!(**inner, Routing::Broadcast) && id == peer_id2)
+        );
+        assert!(
+            matches!(parsed3.routing, Routing::From(ref inner, id) if matches!(**inner, Routing::Broadcast) && id == peer_id2)
+        );
 
         let result = timeout(Duration::from_millis(50), rx2.recv()).await;
         assert!(result.is_err());
@@ -242,7 +255,7 @@ mod tests {
         let _ = rx1.recv().await;
 
         let test_message = RoutedSignallingMessage {
-            routing: Routing::To(peer_id1, peer_id2),
+            routing: Routing::From(Box::new(Routing::To(peer_id1)), peer_id2),
             message: SignallingMessage::NewPeer,
         };
 
@@ -254,7 +267,9 @@ mod tests {
             .expect("Should receive a message");
 
         let parsed1: RoutedSignallingMessage = serde_json::from_str(&msg1).unwrap();
-        assert!(matches!(parsed1.routing, Routing::To(to_id, _) if to_id == peer_id1));
+        assert!(
+            matches!(parsed1.routing, Routing::From(ref inner, from_id) if matches!(**inner, Routing::To(to_id) if to_id == peer_id1) && from_id == peer_id2)
+        );
 
         let result = timeout(Duration::from_millis(50), rx2.recv()).await;
         assert!(result.is_err());
@@ -266,7 +281,7 @@ mod tests {
         let nonexistent_id = Uuid::new_v4();
 
         let test_message = RoutedSignallingMessage {
-            routing: Routing::To(nonexistent_id, Uuid::new_v4()),
+            routing: Routing::From(Box::new(Routing::To(nonexistent_id)), Uuid::new_v4()),
             message: SignallingMessage::NewPeer,
         };
 
