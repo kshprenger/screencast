@@ -9,7 +9,7 @@ use webrtc::{
 pub enum Routing {
     Broadcast,
     To(Uuid),
-    From(Box<Routing>, Uuid),
+    From(Box<Routing>, Uuid), // Only server assigns that type
 }
 
 pub fn add_from(routing: Routing, from: Uuid) -> Routing {

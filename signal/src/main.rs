@@ -78,6 +78,7 @@ async fn handle_socket(socket: WebSocket, peer_manager: PeerManager, id: Uuid) {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             match serde_json::from_str::<RoutedSignallingMessage>(&text) {
                 Ok(mut message) => {
+                    tracing::info!("Got message: {:?}", message);
                     message.routing = add_from(message.routing, id);
                     peer_manager_clone.send_message(message).await;
                 }

@@ -1,6 +1,10 @@
 mod errors;
+mod events;
+mod state;
 
 use crate::transport::errors::TransportErrors;
+use crate::transport::events::Events;
+use crate::transport::state::State;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
@@ -9,7 +13,7 @@ use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, Mutex, MutexGuard, RwLock};
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_tungstenite::MaybeTlsStream;
@@ -29,10 +33,12 @@ pub struct WebrtcTransport {
     signalling_server_port: u16,
     webrtc_api: API,
     default_config: RTCConfiguration,
-    conns_state: RwLock<PeersState>,
+    conns_state: Mutex<PeersState>,
+    events_tx: broadcast::Sender<Events>,
 }
 
 struct PeersState {
+    state: State,
     ws_tx: Option<WsTx>,
     peers: HashMap<Uuid, RTCPeerConnection>,
 }
@@ -49,7 +55,7 @@ impl WebrtcTransport {
             Ok((ws_stream, _)) => {
                 tracing::info!("Connection successful!");
                 let (tx, rx) = ws_stream.split();
-                self.conns_state.write().await.ws_tx = Some(tx);
+                self.conns_state.lock().await.ws_tx = Some(tx);
                 Ok(rx)
             }
             Err(err) => {
@@ -60,10 +66,10 @@ impl WebrtcTransport {
     }
 
     async fn send_signalling_message(
-        self: &Arc<Self>,
+        peer_state: &mut MutexGuard<'_, PeersState>,
         message: RoutedSignallingMessage,
     ) -> Result<(), TransportErrors> {
-        if let Some(ws_tx) = &mut self.conns_state.write().await.ws_tx {
+        if let Some(ws_tx) = &mut peer_state.ws_tx {
             if let Err(err) = ws_tx
                 .send(tungstenite::Message::Text(Utf8Bytes::from(
                     serde_json::to_string(&message)?,
@@ -89,12 +95,15 @@ impl WebrtcTransport {
             Box::pin(async move {
                 if let Some(candidate) = candidate {
                     tracing::info!("Found ICE candidate: {candidate}");
-                    if let Err(err) = self_clone2
-                        .send_signalling_message(RoutedSignallingMessage {
+                    let mut conns_state = self_clone2.conns_state.lock().await;
+                    if let Err(err) = Self::send_signalling_message(
+                        &mut conns_state,
+                        RoutedSignallingMessage {
                             routing: Routing::To(to),
                             message: SignallingMessage::ICECandidate { candidate },
-                        })
-                        .await
+                        },
+                    )
+                    .await
                     {
                         tracing::error!("Could not send ICE candidate to peer: {to}, error: {err}");
                     }
@@ -133,19 +142,22 @@ impl WebrtcTransport {
                 self.setup_background_ice_candidates_transmitting(&conn, from)
                     .await;
 
-                self.conns_state.write().await.peers.insert(from, conn);
+                let mut conns_state = self.conns_state.lock().await;
+                conns_state.peers.insert(from, conn);
 
                 // Build all to all network topology.
                 // If somebody joins network broadcasting itself, we should reply back only to that peer
                 // in order not to flood network with messages.
                 match inner_routing {
                     Routing::Broadcast => {
-                        if let Err(err) = self
-                            .send_signalling_message(RoutedSignallingMessage {
+                        if let Err(err) = Self::send_signalling_message(
+                            &mut conns_state,
+                            RoutedSignallingMessage {
                                 routing: Routing::To(from),
                                 message: SignallingMessage::NewPeer,
-                            })
-                            .await
+                            },
+                        )
+                        .await
                         {
                             tracing::error!("Could not reply to new_peer message: {err}");
                         };
@@ -158,14 +170,14 @@ impl WebrtcTransport {
             }
             SignallingMessage::PeerLeft => {
                 tracing::warn!("Peer {from} disconnected");
-                self.conns_state.write().await.peers.remove(&from);
+                self.conns_state.lock().await.peers.remove(&from);
             }
             SignallingMessage::Offer { sdp } => {
                 tracing::info!("Received SDP Offer from peer:{from}, offer:{:?}", sdp);
 
-                let state = self.conns_state.read().await;
+                let mut peer_state = self.conns_state.lock().await;
 
-                let conn = match state.peers.get(&from) {
+                let conn = match peer_state.peers.get(&from) {
                     Some(conn) => conn,
                     None => {
                         tracing::warn!(
@@ -193,20 +205,38 @@ impl WebrtcTransport {
                     return;
                 }
 
-                if let Err(err) = self
-                    .send_signalling_message(RoutedSignallingMessage {
+                if let Err(err) = Self::send_signalling_message(
+                    &mut peer_state,
+                    RoutedSignallingMessage {
                         routing: Routing::To(from),
                         message: SignallingMessage::Answer { sdp: answer },
-                    })
-                    .await
+                    },
+                )
+                .await
                 {
                     tracing::error!("Could not answer on offer: {}", err);
                 }
             }
             SignallingMessage::Answer { sdp } => {
                 tracing::info!("Received SDP Answer from: {from}, answer: {:?}", sdp);
+                let mut state = self.conns_state.lock().await;
 
-                let state = self.conns_state.read().await;
+                match state.state {
+                    State::Idle => {
+                        tracing::warn!("Currently not gathering answers so message ignored")
+                    }
+                    State::GatheringAnswers(remain) => {
+                        if remain == 1 {
+                            if let Err(err) = self.events_tx.send(Events::GatheredAnswers) {
+                                tracing::error!("Could not send GatheredAnswers event: {err}");
+                                return;
+                            }
+                            state.state = State::Idle;
+                        } else {
+                            state.state = State::GatheringAnswers(remain - 1)
+                        }
+                    }
+                }
 
                 let conn = match state.peers.get(&from) {
                     Some(conn) => conn,
@@ -224,7 +254,7 @@ impl WebrtcTransport {
                 }
             }
             SignallingMessage::ICECandidate { candidate } => {
-                match self.conns_state.read().await.peers.get(&from) {
+                match self.conns_state.lock().await.peers.get(&from) {
                     Some(peer) => {
                         let _ = peer.add_ice_candidate(candidate.to_json().unwrap()).await;
                     }
@@ -251,22 +281,32 @@ impl WebrtcTransport {
 
         let api = APIBuilder::new().build();
 
+        let events_tx = broadcast::Sender::new(10);
+
         Arc::new(Self {
             signalling_server_address: address,
             signalling_server_port: port,
             webrtc_api: api,
             default_config: config,
-            conns_state: RwLock::new(PeersState {
+            conns_state: Mutex::new(PeersState {
                 ws_tx: None,
                 peers: HashMap::new(),
+                state: State::Idle,
             }),
+            events_tx,
         })
     }
 
     pub async fn create_and_send_offers(self: Arc<Self>) {
-        let peers_state = self.conns_state.read().await;
+        let mut peers_state = self.conns_state.lock().await;
 
-        for (&peer_id, conn) in &peers_state.peers {
+        peers_state.state = State::GatheringAnswers(peers_state.peers.len());
+
+        // Avoid borrowing problems
+        let peer_ids: Vec<Uuid> = peers_state.peers.keys().cloned().collect();
+
+        for peer_id in peer_ids {
+            let conn = peers_state.peers.get(&peer_id).unwrap();
             let offer = match conn.create_offer(None).await {
                 Ok(offer) => offer,
                 Err(err) => {
@@ -280,16 +320,22 @@ impl WebrtcTransport {
                 continue;
             }
 
-            if let Err(err) = self
-                .send_signalling_message(RoutedSignallingMessage {
+            if let Err(err) = Self::send_signalling_message(
+                &mut peers_state,
+                RoutedSignallingMessage {
                     routing: Routing::To(peer_id),
                     message: SignallingMessage::Offer { sdp: offer },
-                })
-                .await
+                },
+            )
+            .await
             {
                 tracing::error!("Failed to send offer to peer {peer_id}: {err}");
             }
         }
+    }
+
+    pub fn events(self: &Arc<Self>) -> broadcast::Receiver<Events> {
+        self.events_tx.subscribe()
     }
 
     // Main loop (blocking)

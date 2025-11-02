@@ -61,8 +61,8 @@ impl ScreenCapturer for XCapCapturer {
                                 return;
                             }
                         }
-                        Err(_) => {
-                            tracing::warn!("Frame tx is closed. Terminating task.");
+                        Err(err) => {
+                            tracing::warn!("Frame tx is closed. Terminating task. {err}");
                             return;
                         }
                     }
