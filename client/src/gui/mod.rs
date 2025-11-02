@@ -14,23 +14,23 @@ use crate::{
 pub(super) struct GUI {
     frame_rx: Option<mpsc::Receiver<super::video::Frame>>,
     webrtc: Arc<WebrtcTransport>,
-    webrtc_rt: Arc<tokio::runtime::Runtime>,
+    async_rt: Arc<tokio::runtime::Runtime>,
     state: GUIState,
 }
 
 impl GUI {
-    pub fn new(webrtc: Arc<WebrtcTransport>, webrtc_rt: Arc<tokio::runtime::Runtime>) -> Self {
+    pub fn new(webrtc: Arc<WebrtcTransport>, async_rt: Arc<tokio::runtime::Runtime>) -> Self {
         GUI {
             frame_rx: None,
             state: GUIState::Idle,
-            webrtc_rt,
+            async_rt,
             webrtc,
         }
     }
 }
 
 impl eframe::App for GUI {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         egui::TopBottomPanel::bottom("buttons").show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 if ui.button("Toggle stream").clicked() {
@@ -50,7 +50,7 @@ impl eframe::App for GUI {
                                 },
                             };
                             let webrtc_clone = Arc::clone(&self.webrtc);
-                            self.webrtc_rt.spawn(webrtc_clone.create_and_send_offers());
+                            self.async_rt.spawn(webrtc_clone.create_and_send_offers());
                         }
                         GUIState::Streaming => {
                             self.frame_rx = None;

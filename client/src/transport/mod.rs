@@ -292,7 +292,7 @@ impl WebrtcTransport {
         }
     }
 
-    // Blocks
+    // Main loop (blocking)
     pub async fn join_peer_network(self: &Arc<Self>) {
         let mut retry_delay = Duration::from_millis(100);
         let max_delay = Duration::from_secs(2);
@@ -301,7 +301,6 @@ impl WebrtcTransport {
         loop {
             match self.connect().await {
                 Ok(mut rx) => {
-                    // Reset retry delay on successful connection
                     retry_delay = Duration::from_millis(100);
 
                     while let Some(msg_result) = rx.next().await {
