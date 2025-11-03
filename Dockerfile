@@ -1,22 +1,32 @@
-# Linux x86_64 static musl build
-FROM --platform=linux/amd64 rust:alpine AS builder
+FROM --platform=linux/amd64 rust:1.90.0 AS builder
 
-RUN apk add --no-cache \
-    musl-dev \
-    pipewire-dev \
-    pkgconf \
-    clang-dev \
-    llvm-static
+RUN apt-get update && \
+    apt-get install -y \
+    build-essential \
+    gcc \
+    g++ \
+    llvm \
+    clang \
+    libclang-dev \
+    lld \
+    gcc-x86-64-linux-gnu \
+    pkg-config \
+    libpipewire-0.3-dev \
+    libegl1-mesa-dev \
+    libgl1-mesa-dev \
+    libgles2-mesa-dev \
+    libdrm-dev \
+    libgbm-dev \
+    libwayland-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN rustup target add x86_64-unknown-linux-musl
+RUN rustup target add x86_64-unknown-linux-gnu
 
-WORKDIR /usr/src/screencast
+WORKDIR /app
+COPY . .
 
-COPY Cargo.toml ./
-COPY client ./client/
-COPY signal ./signal/
-COPY webrtc_model ./webrtc_model/
+RUN cargo build --release --target x86_64-unknown-linux-gnu
 
-ENV LIBCLANG_STATIC=1
-ENV LLVM_CONFIG_PATH=/usr/lib/llvm20/bin/llvm-config
-RUN cargo build --jobs 8 --release --target x86_64-unknown-linux-musl --workspace
+# Extract stage - copy binaries to a clean layer
+FROM scratch AS export
+COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/ /
