@@ -13,7 +13,7 @@ use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, Mutex, MutexGuard, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, MutexGuard, RwLock};
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_tungstenite::MaybeTlsStream;
@@ -21,6 +21,9 @@ use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::{APIBuilder, API};
+use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
+use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::RTCPeerConnection;
@@ -42,7 +45,7 @@ pub struct WebrtcTransport {
 struct PeersState {
     state: State,
     ws_tx: Option<WsTx>,
-    peers: HashMap<Uuid, RTCPeerConnection>,
+    peers: HashMap<Uuid, (RTCPeerConnection, mpsc::Sender<String>)>,
 }
 
 impl WebrtcTransport {
@@ -148,8 +151,40 @@ impl WebrtcTransport {
                     tracing::error!("Could not add transceiver: {err}")
                 }
 
+                let dc_init = RTCDataChannelInit {
+                    ..Default::default()
+                };
+
+                let d = conn
+                    .create_data_channel("chan", Some(dc_init))
+                    .await
+                    .unwrap();
+
+                let d_clone = Arc::clone(&d);
+
+                let (d_tx, mut d_rx) = mpsc::channel(10);
+
+                d.on_open(Box::new(move || {
+                    tracing::info!("Data channel opened!");
+                    Box::pin(async move {
+                        while let Some(message) = d_rx.recv().await {
+                            tracing::info!("Sending: {message}...");
+                            d_clone.send_text(message).await.unwrap();
+                        }
+                    })
+                }));
+
+                conn.on_data_channel(Box::new(move |d: Arc<RTCDataChannel>| {
+                    Box::pin(async move {
+                        d.on_message(Box::new(move |m: DataChannelMessage| {
+                            tracing::info!("{m:?}!");
+                            Box::pin(async move {})
+                        }));
+                    })
+                }));
+
                 let mut conns_state = self.conns_state.lock().await;
-                conns_state.peers.insert(from, conn);
+                conns_state.peers.insert(from, (conn, d_tx));
 
                 // Build all to all network topology.
                 // If somebody joins network broadcasting itself, we should reply back only to that peer
@@ -183,7 +218,7 @@ impl WebrtcTransport {
 
                 let mut peer_state = self.conns_state.lock().await;
 
-                let conn = match peer_state.peers.get(&from) {
+                let (conn, _) = match peer_state.peers.get(&from) {
                     Some(conn) => conn,
                     None => {
                         tracing::warn!(
@@ -244,11 +279,11 @@ impl WebrtcTransport {
                     }
                 }
 
-                let conn = match state.peers.get(&from) {
+                let (conn, _) = match state.peers.get(&from) {
                     Some(conn) => conn,
                     None => {
                         tracing::warn!(
-                            "Could find peer that offers. Possibly it have disconnected before"
+                            "Could find peer that offers. Possibly it disconnected before"
                         );
                         return;
                     }
@@ -262,7 +297,7 @@ impl WebrtcTransport {
             SignallingMessage::ICECandidate { candidate } => {
                 tracing::info!("Received candidate {candidate} from {from}");
                 match self.conns_state.lock().await.peers.get(&from) {
-                    Some(peer) => {
+                    Some((peer, _)) => {
                         let _ = peer.add_ice_candidate(candidate.to_json().unwrap()).await;
                     }
                     None => tracing::warn!(
@@ -314,7 +349,7 @@ impl WebrtcTransport {
         let peer_ids: Vec<Uuid> = peers_state.peers.keys().cloned().collect();
 
         for peer_id in peer_ids {
-            let conn = peers_state.peers.get(&peer_id).unwrap();
+            let (conn, _) = peers_state.peers.get(&peer_id).unwrap();
             let offer = match conn.create_offer(None).await {
                 Ok(offer) => offer,
                 Err(err) => {
@@ -344,6 +379,19 @@ impl WebrtcTransport {
 
     pub fn events(self: &Arc<Self>) -> broadcast::Receiver<Events> {
         self.events_tx.subscribe()
+    }
+
+    pub async fn send_text_message(self: Arc<Self>, m: impl Into<String>) {
+        let m_string = m.into();
+        futures_util::future::join_all(
+            self.conns_state
+                .lock()
+                .await
+                .peers
+                .values()
+                .map(|(_, chan)| async { chan.send(m_string.clone()).await.unwrap() }),
+        )
+        .await;
     }
 
     // Main loop (blocking)
