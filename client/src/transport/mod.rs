@@ -5,6 +5,7 @@ mod state;
 use crate::transport::errors::TransportErrors;
 use crate::transport::events::Events;
 use crate::transport::state::State;
+use crate::video::Frame;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
@@ -45,7 +46,7 @@ pub struct WebrtcTransport {
 struct PeersState {
     state: State,
     ws_tx: Option<WsTx>,
-    peers: HashMap<Uuid, (RTCPeerConnection, mpsc::Sender<String>)>,
+    peers: HashMap<Uuid, (RTCPeerConnection, mpsc::Sender<Vec<u8>>)>,
 }
 
 impl WebrtcTransport {
@@ -54,8 +55,7 @@ impl WebrtcTransport {
             "ws://[{}]:{}/ws",
             self.signalling_server_address, self.signalling_server_port
         );
-        tracing::info!("Signalling server url is: {url}");
-        tracing::info!("Connecting...");
+        tracing::info!("Signalling server url is: {url}\nConnecting...");
         match tokio_tungstenite::connect_async(url).await {
             Ok((ws_stream, _)) => {
                 tracing::info!("Connection successful!");
@@ -119,6 +119,52 @@ impl WebrtcTransport {
         }));
     }
 
+    async fn setup_transceivers(self: &Arc<Self>, conn: &RTCPeerConnection) {
+        conn.add_transceiver_from_kind(RTPCodecType::Video, None)
+            .await
+            .unwrap(); // Safe because valid options was provided
+    }
+
+    async fn setup_data_channels(
+        self: &Arc<Self>,
+        conn: &RTCPeerConnection,
+        mut message_queue_rx: mpsc::Receiver<Vec<u8>>,
+    ) {
+        let dc_init = RTCDataChannelInit {
+            ..Default::default()
+        };
+
+        let d = conn
+            .create_data_channel("data chan", Some(dc_init))
+            .await
+            .unwrap(); // Safe, because default options was provided
+
+        let d_clone = Arc::clone(&d);
+
+        // Send part
+        d.on_open(Box::new(move || {
+            Box::pin(async move {
+                while let Some(message) = message_queue_rx.recv().await {
+                    if let Err(err) = d_clone
+                        .send(&bytes::Bytes::copy_from_slice(message.as_slice()))
+                        .await
+                    {
+                        tracing::error!("Could not send message through data channel: {err}");
+                    }
+                }
+            })
+        }));
+
+        // Recv part
+        conn.on_data_channel(Box::new(move |d: Arc<RTCDataChannel>| {
+            Box::pin(async move {
+                d.on_message(Box::new(move |m: DataChannelMessage| {
+                    Box::pin(async move {})
+                }));
+            })
+        }));
+    }
+
     async fn handle_signalling_message(self: &Arc<Self>, routed_message: RoutedSignallingMessage) {
         let (inner_routing, from) = match routed_message.routing {
             Routing::From(inner_routing, from) => (*inner_routing, from),
@@ -144,47 +190,13 @@ impl WebrtcTransport {
                 self.setup_background_ice_candidates_transmitting(&conn, from)
                     .await;
 
-                if let Err(err) = conn
-                    .add_transceiver_from_kind(RTPCodecType::Video, None)
-                    .await
-                {
-                    tracing::error!("Could not add transceiver: {err}")
-                }
+                self.setup_transceivers(&conn).await;
 
-                let dc_init = RTCDataChannelInit {
-                    ..Default::default()
-                };
-
-                let d = conn
-                    .create_data_channel("chan", Some(dc_init))
-                    .await
-                    .unwrap();
-
-                let d_clone = Arc::clone(&d);
-
-                let (d_tx, mut d_rx) = mpsc::channel(10);
-
-                d.on_open(Box::new(move || {
-                    tracing::info!("Data channel opened!");
-                    Box::pin(async move {
-                        while let Some(message) = d_rx.recv().await {
-                            tracing::info!("Sending: {message}...");
-                            d_clone.send_text(message).await.unwrap();
-                        }
-                    })
-                }));
-
-                conn.on_data_channel(Box::new(move |d: Arc<RTCDataChannel>| {
-                    Box::pin(async move {
-                        d.on_message(Box::new(move |m: DataChannelMessage| {
-                            tracing::info!("{m:?}!");
-                            Box::pin(async move {})
-                        }));
-                    })
-                }));
+                let (message_queue_tx, message_queue_rx) = mpsc::channel(100);
+                self.setup_data_channels(&conn, message_queue_rx).await;
 
                 let mut conns_state = self.conns_state.lock().await;
-                conns_state.peers.insert(from, (conn, d_tx));
+                conns_state.peers.insert(from, (conn, message_queue_tx));
 
                 // Build all to all network topology.
                 // If somebody joins network broadcasting itself, we should reply back only to that peer
@@ -381,15 +393,14 @@ impl WebrtcTransport {
         self.events_tx.subscribe()
     }
 
-    pub async fn send_text_message(self: Arc<Self>, m: impl Into<String>) {
-        let m_string = m.into();
+    pub async fn send_message(self: Arc<Self>, message: Vec<u8>) {
         futures_util::future::join_all(
             self.conns_state
                 .lock()
                 .await
                 .peers
                 .values()
-                .map(|(_, chan)| async { chan.send(m_string.clone()).await.unwrap() }),
+                .map(|(_, chan)| async { chan.send(message.clone()).await.unwrap() }),
         )
         .await;
     }

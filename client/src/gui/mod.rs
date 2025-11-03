@@ -52,14 +52,8 @@ impl eframe::App for GUI {
                             let webrtc_clone_offers = Arc::clone(&self.webrtc);
                             self.async_rt
                                 .spawn(webrtc_clone_offers.create_and_send_offers());
-                            self.webrtc.events().blocking_recv();
+                            let _ = self.webrtc.events().blocking_recv();
                             tracing::info!("Ready for streaming!");
-                            let webrtc_clone_jopa = Arc::clone(&self.webrtc);
-                            self.async_rt
-                                .spawn(webrtc_clone_jopa.send_text_message("jopa"));
-                            let webrtc_clone_jopa1 = Arc::clone(&self.webrtc);
-                            self.async_rt
-                                .spawn(webrtc_clone_jopa1.send_text_message("jopa"));
                             self.state = GUIState::Streaming;
                         }
                         GUIState::Streaming => {
