@@ -19,10 +19,12 @@ use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
+use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::{APIBuilder, API};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
 type WsTx = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::protocol::Message>;
@@ -136,11 +138,15 @@ impl WebrtcTransport {
                     }
                 };
 
-                // What if peer does not know about us yet??
-                // Then will it lose our Ice candidate?????
-                // NewPeerAck????
                 self.setup_background_ice_candidates_transmitting(&conn, from)
                     .await;
+
+                if let Err(err) = conn
+                    .add_transceiver_from_kind(RTPCodecType::Video, None)
+                    .await
+                {
+                    tracing::error!("Could not add transceiver: {err}")
+                }
 
                 let mut conns_state = self.conns_state.lock().await;
                 conns_state.peers.insert(from, conn);
@@ -173,7 +179,7 @@ impl WebrtcTransport {
                 self.conns_state.lock().await.peers.remove(&from);
             }
             SignallingMessage::Offer { sdp } => {
-                tracing::info!("Received SDP Offer from peer:{from}, offer:{:?}", sdp);
+                tracing::info!("Received SDP Offer from peer:{from}, offer:{sdp:?}");
 
                 let mut peer_state = self.conns_state.lock().await;
 
@@ -188,7 +194,7 @@ impl WebrtcTransport {
                 };
 
                 if let Err(err) = conn.set_remote_description(sdp).await {
-                    tracing::error!("Failed to set remote description: {}", err);
+                    tracing::error!("Failed to set remote description: {err}");
                     return;
                 }
 
@@ -254,6 +260,7 @@ impl WebrtcTransport {
                 }
             }
             SignallingMessage::ICECandidate { candidate } => {
+                tracing::info!("Received candidate {candidate} from {from}");
                 match self.conns_state.lock().await.peers.get(&from) {
                     Some(peer) => {
                         let _ = peer.add_ice_candidate(candidate.to_json().unwrap()).await;
@@ -269,17 +276,18 @@ impl WebrtcTransport {
 
 impl WebrtcTransport {
     pub fn new_shared(address: Ipv6Addr, port: u16) -> Arc<Self> {
-        let ice_servers = vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_string()],
-            ..Default::default()
-        }];
-
         let config = RTCConfiguration {
-            ice_servers,
+            ice_servers: vec![RTCIceServer {
+                urls: vec!["stun:stun.l.google.com:19302".to_string()],
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
-        let api = APIBuilder::new().build();
+        let mut m = MediaEngine::default();
+        m.register_default_codecs().unwrap(); // Safe
+
+        let api = APIBuilder::new().with_media_engine(m).build();
 
         let events_tx = broadcast::Sender::new(10);
 
