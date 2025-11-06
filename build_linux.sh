@@ -1,1 +1,1 @@
-docker build --target export --output ./linux-build-output .
+docker build --target export --output ./target-x86_64-unknown-linux-gnu .
