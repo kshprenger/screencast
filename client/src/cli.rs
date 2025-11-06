@@ -1,4 +1,4 @@
-use std::net::Ipv6Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -6,5 +6,5 @@ pub(super) struct Cli {
     #[arg(long, default_value_t = 35080)]
     pub(super) port: u16,
     #[arg(long)]
-    pub(super) address: Ipv6Addr,
+    pub(super) address: Ipv4Addr,
 }

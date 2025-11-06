@@ -5,16 +5,15 @@ mod state;
 use crate::transport::errors::TransportErrors;
 use crate::transport::events::Events;
 use crate::transport::state::State;
-use crate::video::Frame;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use std::collections::HashMap;
-use std::net::Ipv6Addr;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, mpsc, Mutex, MutexGuard, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, MutexGuard};
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_tungstenite::MaybeTlsStream;
@@ -35,7 +34,7 @@ type WsTx = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::p
 type WsRx = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
 pub struct WebrtcTransport {
-    signalling_server_address: Ipv6Addr,
+    signalling_server_address: Ipv4Addr,
     signalling_server_port: u16,
     webrtc_api: API,
     default_config: RTCConfiguration,
@@ -52,7 +51,7 @@ struct PeersState {
 impl WebrtcTransport {
     async fn connect(self: &Arc<Self>) -> Result<WsRx, TransportErrors> {
         let url = format!(
-            "ws://[{}]:{}/ws",
+            "ws://{}:{}/ws",
             self.signalling_server_address, self.signalling_server_port
         );
         tracing::info!("Signalling server url is: {url}\nConnecting...");
@@ -159,6 +158,7 @@ impl WebrtcTransport {
         conn.on_data_channel(Box::new(move |d: Arc<RTCDataChannel>| {
             Box::pin(async move {
                 d.on_message(Box::new(move |m: DataChannelMessage| {
+                    tracing::info!("GOT: {m:?}");
                     Box::pin(async move {})
                 }));
             })
@@ -322,7 +322,7 @@ impl WebrtcTransport {
 }
 
 impl WebrtcTransport {
-    pub fn new_shared(address: Ipv6Addr, port: u16) -> Arc<Self> {
+    pub fn new_shared(address: Ipv4Addr, port: u16) -> Arc<Self> {
         let config = RTCConfiguration {
             ice_servers: vec![RTCIceServer {
                 urls: vec!["stun:stun.l.google.com:19302".to_string()],

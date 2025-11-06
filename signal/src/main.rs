@@ -33,7 +33,7 @@ async fn main() {
     use clap::Parser;
     let args = config::Args::parse();
 
-    let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], args.port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
     tracing::info!("Starting server on {}", addr);
 
     match tokio::net::TcpListener::bind(addr).await {
