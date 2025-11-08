@@ -20,17 +20,17 @@ fn main() {
     let webrtc = transport::WebrtcTransport::new_shared(args.address, args.port);
     let webrtc_gui = Arc::clone(&webrtc);
 
-    let webrtc_rt = Arc::new(
+    let async_rt = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_io()
             .enable_time()
             .build()
             .unwrap(),
     );
-    let webrtc_rt_gui = Arc::clone(&webrtc_rt);
+    let async_rt_gui = Arc::clone(&async_rt);
 
     std::thread::spawn(move || {
-        webrtc_rt.block_on(webrtc.join_peer_network());
+        async_rt.block_on(webrtc.join_peer_network());
     });
 
     let options = eframe::NativeOptions {
@@ -45,7 +45,7 @@ fn main() {
             // This gives us image support
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Ok(Box::new(gui::GUI::new(webrtc_gui, webrtc_rt_gui)))
+            Ok(Box::new(gui::GUI::new(webrtc_gui, async_rt_gui)))
         }),
     )
     .unwrap();

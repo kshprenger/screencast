@@ -2,9 +2,12 @@ mod errors;
 mod events;
 mod state;
 
+pub use events::WebrtcEvents;
+
 use crate::transport::errors::TransportErrors;
-use crate::transport::events::Events;
 use crate::transport::state::State;
+use crate::video::Frame;
+use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
@@ -13,7 +16,7 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, mpsc, Mutex, MutexGuard};
+use tokio::sync::{broadcast, mpsc, watch, Mutex, MutexGuard};
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_tungstenite::MaybeTlsStream;
@@ -21,13 +24,12 @@ use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::{APIBuilder, API};
-use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
-use webrtc::data_channel::data_channel_message::DataChannelMessage;
-use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
+use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
+use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTPCodecType};
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
 type WsTx = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::protocol::Message>;
@@ -39,13 +41,14 @@ pub struct WebrtcTransport {
     webrtc_api: API,
     default_config: RTCConfiguration,
     conns_state: Mutex<PeersState>,
-    events_tx: broadcast::Sender<Events>,
 }
 
 struct PeersState {
     state: State,
+    events_tx: Option<mpsc::UnboundedSender<WebrtcEvents>>, // Webrtc --events--> GUI
     ws_tx: Option<WsTx>,
-    peers: HashMap<Uuid, (RTCPeerConnection, mpsc::Sender<Vec<u8>>)>,
+    track: Option<Arc<TrackLocalStaticSample>>,
+    peers: HashMap<Uuid, RTCPeerConnection>,
 }
 
 impl WebrtcTransport {
@@ -121,46 +124,42 @@ impl WebrtcTransport {
     async fn setup_transceivers(self: &Arc<Self>, conn: &RTCPeerConnection) {
         conn.add_transceiver_from_kind(RTPCodecType::Video, None)
             .await
-            .unwrap(); // Safe because valid options was provided
+            .unwrap(); // Safe because valid options were provided
     }
 
-    async fn setup_data_channels(
-        self: &Arc<Self>,
-        conn: &RTCPeerConnection,
-        mut message_queue_rx: mpsc::Receiver<Vec<u8>>,
-    ) {
-        let dc_init = RTCDataChannelInit {
-            ..Default::default()
-        };
-
-        let d = conn
-            .create_data_channel("data chan", Some(dc_init))
-            .await
-            .unwrap(); // Safe, because default options was provided
-
-        let d_clone = Arc::clone(&d);
-
-        // Send part
-        d.on_open(Box::new(move || {
+    async fn setup_on_track(self: &Arc<Self>, conn: &RTCPeerConnection) {
+        let self_clone = Arc::clone(&self);
+        conn.on_track(Box::new(move |track, _, _| {
+            let (frame_tx, frame_rx) = mpsc::channel(100);
+            self_clone
+                .conns_state
+                .blocking_lock()
+                .events_tx
+                .as_ref()
+                .and_then(|chan| {
+                    // Notify GUI about stream
+                    if let Err(err) = chan.send(WebrtcEvents::TrackArrived(frame_rx)) {
+                        tracing::error!("Could not send track event to GUI: {err}");
+                    }
+                    Some(())
+                })
+                .or_else(|| {
+                    tracing::warn!("No GUI event subscription");
+                    Some(())
+                });
             Box::pin(async move {
-                while let Some(message) = message_queue_rx.recv().await {
-                    if let Err(err) = d_clone
-                        .send(&bytes::Bytes::copy_from_slice(message.as_slice()))
+                while let Ok((rtp_packet, _)) = track.read_rtp().await {
+                    if let Err(err) = frame_tx
+                        .send(Frame {
+                            width: 1080,
+                            height: 720,
+                            data: rtp_packet.payload.to_vec(),
+                        })
                         .await
                     {
-                        tracing::error!("Could not send message through data channel: {err}");
+                        tracing::error!("Could not send frame to GUI: {err}");
                     }
                 }
-            })
-        }));
-
-        // Recv part
-        conn.on_data_channel(Box::new(move |d: Arc<RTCDataChannel>| {
-            Box::pin(async move {
-                d.on_message(Box::new(move |m: DataChannelMessage| {
-                    tracing::info!("GOT: {m:?}");
-                    Box::pin(async move {})
-                }));
             })
         }));
     }
@@ -192,11 +191,10 @@ impl WebrtcTransport {
 
                 self.setup_transceivers(&conn).await;
 
-                let (message_queue_tx, message_queue_rx) = mpsc::channel(100);
-                self.setup_data_channels(&conn, message_queue_rx).await;
+                self.setup_on_track(&conn).await;
 
                 let mut conns_state = self.conns_state.lock().await;
-                conns_state.peers.insert(from, (conn, message_queue_tx));
+                conns_state.peers.insert(from, conn);
 
                 // Build all to all network topology.
                 // If somebody joins network broadcasting itself, we should reply back only to that peer
@@ -230,7 +228,7 @@ impl WebrtcTransport {
 
                 let mut peer_state = self.conns_state.lock().await;
 
-                let (conn, _) = match peer_state.peers.get(&from) {
+                let conn = match peer_state.peers.get(&from) {
                     Some(conn) => conn,
                     None => {
                         tracing::warn!(
@@ -278,20 +276,21 @@ impl WebrtcTransport {
                     State::Idle => {
                         tracing::warn!("Currently not gathering answers so message ignored")
                     }
-                    State::GatheringAnswers(remain) => {
-                        if remain == 1 {
-                            if let Err(err) = self.events_tx.send(Events::GatheredAnswers) {
-                                tracing::error!("Could not send GatheredAnswers event: {err}");
-                                return;
-                            }
-                            state.state = State::Idle;
-                        } else {
-                            state.state = State::GatheringAnswers(remain - 1)
+                    State::GatheringAnswers(remain) => match remain {
+                        1 => {
+                            state.events_tx.clone().and_then(|chan| {
+                                if let Err(err) = chan.send(WebrtcEvents::GatheredAnswers) {
+                                    tracing::error!("Could not send GatheredAnswers event: {err}");
+                                }
+                                state.state = State::Idle;
+                                Some(())
+                            });
                         }
-                    }
+                        _ => state.state = State::GatheringAnswers(remain - 1),
+                    },
                 }
 
-                let (conn, _) = match state.peers.get(&from) {
+                let conn = match state.peers.get(&from) {
                     Some(conn) => conn,
                     None => {
                         tracing::warn!(
@@ -303,13 +302,12 @@ impl WebrtcTransport {
 
                 if let Err(err) = conn.set_remote_description(sdp).await {
                     tracing::error!("Failed to set remote description: {:?}", err);
-                    return;
                 }
             }
             SignallingMessage::ICECandidate { candidate } => {
                 tracing::info!("Received candidate {candidate} from {from}");
                 match self.conns_state.lock().await.peers.get(&from) {
-                    Some((peer, _)) => {
+                    Some(peer) => {
                         let _ = peer.add_ice_candidate(candidate.to_json().unwrap()).await;
                     }
                     None => tracing::warn!(
@@ -336,8 +334,6 @@ impl WebrtcTransport {
 
         let api = APIBuilder::new().with_media_engine(m).build();
 
-        let events_tx = broadcast::Sender::new(10);
-
         Arc::new(Self {
             signalling_server_address: address,
             signalling_server_port: port,
@@ -346,9 +342,10 @@ impl WebrtcTransport {
             conns_state: Mutex::new(PeersState {
                 ws_tx: None,
                 peers: HashMap::new(),
+                track: None,
+                events_tx: None,
                 state: State::Idle,
             }),
-            events_tx,
         })
     }
 
@@ -361,7 +358,7 @@ impl WebrtcTransport {
         let peer_ids: Vec<Uuid> = peers_state.peers.keys().cloned().collect();
 
         for peer_id in peer_ids {
-            let (conn, _) = peers_state.peers.get(&peer_id).unwrap();
+            let conn = peers_state.peers.get(&peer_id).unwrap();
             let offer = match conn.create_offer(None).await {
                 Ok(offer) => offer,
                 Err(err) => {
@@ -389,20 +386,46 @@ impl WebrtcTransport {
         }
     }
 
-    pub fn events(self: &Arc<Self>) -> broadcast::Receiver<Events> {
-        self.events_tx.subscribe()
+    pub async fn create_and_add_track(self: Arc<Self>) {
+        let track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: "video/h264".to_owned(),
+                ..Default::default()
+            },
+            "video".to_owned(),
+            "webrtc-rs".to_owned(),
+        ));
+
+        futures_util::future::join_all(self.conns_state.lock().await.peers.values().map(
+            |conn| async {
+                let track_clone = Arc::clone(&track);
+                conn.add_track(track_clone).await.unwrap();
+            },
+        ))
+        .await;
     }
 
-    pub async fn send_message(self: Arc<Self>, message: Vec<u8>) {
-        futures_util::future::join_all(
-            self.conns_state
-                .lock()
-                .await
-                .peers
-                .values()
-                .map(|(_, chan)| async { chan.send(message.clone()).await.unwrap() }),
-        )
-        .await;
+    pub fn subscribe(self: &Arc<Self>) -> mpsc::UnboundedReceiver<WebrtcEvents> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.conns_state.blocking_lock().events_tx = Some(tx);
+        rx
+    }
+
+    pub async fn send_frame(self: Arc<Self>, frame: Frame) {
+        match self.conns_state.lock().await.track.as_ref() {
+            Some(track) => {
+                if let Err(err) = track
+                    .write_sample(&Sample {
+                        data: Bytes::copy_from_slice(&frame.data.as_slice()),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    tracing::error!("Could not write frame: {err}")
+                }
+            }
+            None => tracing::warn!("Could not find trac to write frames"),
+        }
     }
 
     // Main loop (blocking)

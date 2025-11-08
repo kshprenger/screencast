@@ -1,5 +1,5 @@
 pub(super) enum GUIState {
     Idle,
     Streaming,
-    Watching,
+    Watching(tokio::sync::mpsc::Receiver<crate::video::Frame>),
 }
