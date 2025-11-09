@@ -1,5 +1,5 @@
 #[derive(thiserror::Error, Debug)]
-pub enum TransportErrors {
+pub enum NetworkErrors {
     #[error("Connection failed")]
     ConnectionFailed,
     #[error("Connection is not openned")]

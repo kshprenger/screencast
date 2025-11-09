@@ -3,10 +3,10 @@ use std::sync::Arc;
 use clap::Parser;
 use tracing_subscriber::FmtSubscriber;
 
+mod capture;
 mod cli;
 mod gui;
-mod transport;
-mod video;
+mod network;
 
 fn main() {
     let subscriber = FmtSubscriber::builder()
@@ -17,7 +17,7 @@ fn main() {
 
     let args = cli::Cli::parse();
 
-    let webrtc = transport::WebrtcTransport::new_shared(args.address, args.port);
+    let webrtc = network::WebrtcNetwork::new_shared(args.address, args.port);
     let webrtc_gui = Arc::clone(&webrtc);
 
     let async_rt = Arc::new(
@@ -27,10 +27,11 @@ fn main() {
             .build()
             .unwrap(),
     );
+
     let async_rt_gui = Arc::clone(&async_rt);
 
     std::thread::spawn(move || {
-        async_rt.block_on(webrtc.join_peer_network());
+        async_rt.block_on(webrtc.join());
     });
 
     let options = eframe::NativeOptions {

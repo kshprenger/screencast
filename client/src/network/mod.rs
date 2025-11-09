@@ -1,12 +1,13 @@
+mod connection;
 mod errors;
 mod events;
 mod state;
 
 pub use events::WebrtcEvents;
 
-use crate::transport::errors::TransportErrors;
-use crate::transport::state::State;
-use crate::video::Frame;
+use crate::capture::Frame;
+use crate::network::errors::NetworkErrors;
+use crate::network::state::State;
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::SinkExt;
@@ -35,7 +36,7 @@ use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 type WsTx = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::protocol::Message>;
 type WsRx = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
-pub struct WebrtcTransport {
+pub struct WebrtcNetwork {
     signalling_server_address: Ipv4Addr,
     signalling_server_port: u16,
     webrtc_api: API,
@@ -51,8 +52,8 @@ struct PeersState {
     peers: HashMap<Uuid, RTCPeerConnection>,
 }
 
-impl WebrtcTransport {
-    async fn connect(self: &Arc<Self>) -> Result<WsRx, TransportErrors> {
+impl WebrtcNetwork {
+    async fn connect(self: &Arc<Self>) -> Result<WsRx, NetworkErrors> {
         let url = format!(
             "ws://{}:{}/ws",
             self.signalling_server_address, self.signalling_server_port
@@ -67,7 +68,7 @@ impl WebrtcTransport {
             }
             Err(err) => {
                 tracing::error!("Could not open ws with signalling server {err}");
-                Err(TransportErrors::ConnectionFailed)
+                Err(NetworkErrors::ConnectionFailed)
             }
         }
     }
@@ -75,7 +76,7 @@ impl WebrtcTransport {
     async fn send_signalling_message(
         peer_state: &mut MutexGuard<'_, PeersState>,
         message: RoutedSignallingMessage,
-    ) -> Result<(), TransportErrors> {
+    ) -> Result<(), NetworkErrors> {
         if let Some(ws_tx) = &mut peer_state.ws_tx {
             if let Err(err) = ws_tx
                 .send(tungstenite::Message::Text(Utf8Bytes::from(
@@ -84,78 +85,11 @@ impl WebrtcTransport {
                 .await
             {
                 tracing::error!("Failed to send text message: {err}");
-                return Err(TransportErrors::SendControlFailed);
+                return Err(NetworkErrors::SendControlFailed);
             }
             return Ok(());
         }
-        Err(TransportErrors::ConnectionIsNotOpened)
-    }
-
-    async fn setup_background_ice_candidates_transmitting(
-        self: &Arc<Self>,
-        conn: &RTCPeerConnection,
-        to: Uuid,
-    ) {
-        let self_clone1 = Arc::clone(self);
-        conn.on_ice_candidate(Box::new(move |candidate| {
-            let self_clone2 = Arc::clone(&self_clone1);
-            Box::pin(async move {
-                if let Some(candidate) = candidate {
-                    tracing::info!("Found ICE candidate: {candidate}");
-                    let mut conns_state = self_clone2.conns_state.lock().await;
-                    if let Err(err) = Self::send_signalling_message(
-                        &mut conns_state,
-                        RoutedSignallingMessage {
-                            routing: Routing::To(to),
-                            message: SignallingMessage::ICECandidate { candidate },
-                        },
-                    )
-                    .await
-                    {
-                        tracing::error!("Could not send ICE candidate to peer: {to}, error: {err}");
-                    }
-                } else {
-                    tracing::info!("ICE gathering completed");
-                }
-            })
-        }));
-    }
-
-    async fn setup_on_track(self: &Arc<Self>, conn: &RTCPeerConnection) {
-        let self_clone = Arc::clone(&self);
-        conn.on_track(Box::new(move |track, _, _| {
-            let (frame_tx, frame_rx) = mpsc::channel(100);
-            self_clone
-                .conns_state
-                .blocking_lock()
-                .events_tx
-                .as_ref()
-                .and_then(|chan| {
-                    // Notify GUI about stream
-                    if let Err(err) = chan.send(WebrtcEvents::TrackArrived(frame_rx)) {
-                        tracing::error!("Could not send track event to GUI: {err}");
-                    }
-                    Some(())
-                })
-                .or_else(|| {
-                    tracing::warn!("No GUI event subscription");
-                    Some(())
-                });
-            Box::pin(async move {
-                while let Ok((rtp_packet, _)) = track.read_rtp().await {
-                    if let Err(err) = frame_tx
-                        .send(Frame {
-                            width: 1080,
-                            height: 720,
-                            data: rtp_packet.payload.to_vec(),
-                        })
-                        .await
-                    {
-                        tracing::error!("Could not send frame to GUI: {err}");
-                    }
-                }
-            })
-        }));
+        Err(NetworkErrors::ConnectionIsNotOpened)
     }
 
     async fn handle_signalling_message(self: &Arc<Self>, routed_message: RoutedSignallingMessage) {
@@ -168,22 +102,7 @@ impl WebrtcTransport {
             SignallingMessage::NewPeer => {
                 tracing::info!("New peer connected, peer_id: {from}");
 
-                let conn = match self
-                    .webrtc_api
-                    .new_peer_connection(self.default_config.clone())
-                    .await
-                {
-                    Ok(conn) => conn,
-                    Err(err) => {
-                        tracing::error!("Failed to construct new webrtc connection: {err}");
-                        return;
-                    }
-                };
-
-                self.setup_background_ice_candidates_transmitting(&conn, from)
-                    .await;
-
-                self.setup_on_track(&conn).await;
+                let conn = self.create_connection(from).await;
 
                 let mut conns_state = self.conns_state.lock().await;
                 conns_state.peers.insert(from, conn);
@@ -229,8 +148,6 @@ impl WebrtcTransport {
                         return;
                     }
                 };
-
-                // self.setup_on_track(&conn).await;
 
                 if let Err(err) = conn.set_remote_description(sdp).await {
                     tracing::error!("Failed to set remote description: {err}");
@@ -322,7 +239,7 @@ impl WebrtcTransport {
     }
 }
 
-impl WebrtcTransport {
+impl WebrtcNetwork {
     pub fn new_shared(address: Ipv4Addr, port: u16) -> Arc<Self> {
         let config = RTCConfiguration {
             ice_servers: vec![RTCIceServer {
@@ -435,7 +352,7 @@ impl WebrtcTransport {
     }
 
     // Main loop (blocking)
-    pub async fn join_peer_network(self: &Arc<Self>) {
+    pub async fn join(self: &Arc<Self>) {
         let mut retry_delay = Duration::from_millis(100);
         let max_delay = Duration::from_secs(2);
         let backoff_multiplier = 2.0;

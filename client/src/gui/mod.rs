@@ -12,19 +12,19 @@ use tokio::sync::Mutex;
 
 use crate::{
     gui::state::GUIState,
-    transport::WebrtcTransport,
-    video::{self, Frame, ScreenCapturer},
+    network::WebrtcNetwork,
+    capture::{self, Frame, ScreenCapturer},
 };
 
 pub(super) struct GUI {
-    frame_rx: Option<mpsc::Receiver<super::video::Frame>>,
-    webrtc: Arc<WebrtcTransport>,
+    frame_rx: Option<mpsc::Receiver<super::capture::Frame>>,
+    webrtc: Arc<WebrtcNetwork>,
     async_rt: Arc<tokio::runtime::Runtime>,
     state: Arc<Mutex<GUIState>>, // Faster with AtomicPtr???
 }
 
 impl GUI {
-    pub fn new(webrtc: Arc<WebrtcTransport>, async_rt: Arc<tokio::runtime::Runtime>) -> Self {
+    pub fn new(webrtc: Arc<WebrtcNetwork>, async_rt: Arc<tokio::runtime::Runtime>) -> Self {
         let shared_state = Arc::new(Mutex::new(GUIState::Idle));
         let share_state_clone = Arc::clone(&shared_state);
         let events = webrtc.subscribe();
@@ -64,7 +64,7 @@ impl eframe::App for GUI {
                         if ui.button("Toggle stream").clicked() {
                             match curr_state {
                                 GUIState::Idle => {
-                                    match video::XCapCapturer::new() {
+                                    match capture::XCapCapturer::new() {
                                         Err(err) => {
                                             tracing::error!("Could start stream: {err}");
                                             return;
