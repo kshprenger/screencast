@@ -6,7 +6,7 @@ use webrtc::media::io::h264_reader::H264Reader;
 use std::sync::Mutex;
 
 use crate::{
-    capture,
+    capture::{self, H264Stream},
     gui::GUIState,
     network::{WebrtcEvents, WebrtcNetwork},
 };
@@ -34,6 +34,10 @@ impl GUIEventManager {
                 Ok(frame_rx) => frame_rx,
             },
         };
+
+        let h264_stream = H264Stream::new(frame_rx).unwrap();
+
+        let h264_reader = H264Reader::new(h264_stream, 1_000_000);
     }
 
     async fn handle_events(self: Arc<Self>) {
