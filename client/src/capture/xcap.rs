@@ -46,7 +46,7 @@ impl ScreenCapturer for XCapCapturer {
 
     fn start_capturing(&self) -> Result<mpsc::Receiver<Frame>, VideoErrors> {
         match self.monitor.video_recorder() {
-            Ok((_, xcap_frame_rx)) => {
+            Ok((recorder, xcap_frame_rx)) => {
                 let (frame_tx, frame_rx) = mpsc::sync_channel::<Frame>(FRAME_BUFFER_SIZE);
                 std::thread::spawn(move || loop {
                     match xcap_frame_rx.recv() {
@@ -61,12 +61,13 @@ impl ScreenCapturer for XCapCapturer {
                                 return;
                             }
                         }
-                        Err(err) => {
-                            tracing::warn!("Frame tx is closed. Terminating task. {err}");
+                        Err(_) => {
+                            tracing::warn!("Frame tx is closed. Terminating task");
                             return;
                         }
                     }
                 });
+                recorder.start().unwrap();
                 return Ok(frame_rx);
             }
             Err(err) => {
