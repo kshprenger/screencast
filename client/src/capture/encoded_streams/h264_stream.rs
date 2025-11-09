@@ -35,7 +35,6 @@ pub struct H264Stream {
 }
 
 impl H264Stream {
-    /// Create a new H264Stream from a frame receiver channel
     pub fn new(frame_rx: mpsc::Receiver<Frame>) -> Result<Self, VideoErrors> {
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
         let done = Arc::new(Mutex::new(false));
@@ -98,16 +97,6 @@ impl H264Stream {
             _encoder_thread: Some(encoder_thread),
         })
     }
-
-    /// Returns the current number of bytes available in the buffer without consuming them.
-    pub fn buffered_bytes(&self) -> usize {
-        self.buffer.lock().unwrap().len()
-    }
-
-    /// Checks if the encoder thread has finished processing all frames.
-    pub fn is_done(&self) -> bool {
-        *self.done.lock().unwrap()
-    }
 }
 
 impl Read for H264Stream {
@@ -135,7 +124,7 @@ impl Read for H264Stream {
 
             // Brief sleep to avoid busy-waiting
             thread::sleep(std::time::Duration::from_millis(1));
-            spin_loop();
+            spin_loop(); // Optimize
         }
     }
 }

@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use capture::ScreenCapturer;
-use webrtc::media::io::h264_reader::H264Reader;
+use webrtc::media::{io::h264_reader::H264Reader, Sample};
 
 use std::sync::Mutex;
 
@@ -36,8 +36,28 @@ impl GUIEventManager {
         };
 
         let h264_stream = H264Stream::new(frame_rx).unwrap();
+        let mut h264_reader = H264Reader::new(h264_stream, 1_048_576);
 
-        let h264_reader = H264Reader::new(h264_stream, 1_000_000);
+        let webrtc = Arc::clone(&self.webrtc);
+
+        tokio::spawn(async move {
+            loop {
+                let nal = match h264_reader.next_nal() {
+                    Ok(nal) => nal,
+                    Err(err) => {
+                        tracing::error!("All video frames parsed and sent: {err}");
+                        break;
+                    }
+                };
+                webrtc
+                    .send_sample(&Sample {
+                        data: nal.data.freeze(),
+                        duration: Duration::from_secs(1),
+                        ..Default::default()
+                    })
+                    .await;
+            }
+        });
     }
 
     async fn handle_events(self: Arc<Self>) {

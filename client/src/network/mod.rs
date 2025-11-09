@@ -334,20 +334,14 @@ impl WebrtcNetwork {
         rx
     }
 
-    pub async fn send_frame(self: Arc<Self>, frame: Frame) {
+    pub async fn send_sample(self: &Arc<Self>, sample: &Sample) {
         match self.conns_state.lock().await.track.as_ref() {
             Some(track) => {
-                if let Err(err) = track
-                    .write_sample(&Sample {
-                        data: Bytes::copy_from_slice(&frame.data.as_slice()),
-                        ..Default::default()
-                    })
-                    .await
-                {
-                    tracing::error!("Could not write frame: {err}")
+                if let Err(err) = track.write_sample(sample).await {
+                    tracing::error!("Could not write sample: {err}")
                 }
             }
-            None => tracing::warn!("Could not find track to write frame"),
+            None => tracing::warn!("Could not find track to write sample"),
         }
     }
 
