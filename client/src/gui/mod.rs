@@ -8,23 +8,24 @@ use std::sync::{
 
 use eframe::egui;
 use std::sync::mpsc;
+use tokio::sync::Mutex;
 
 use crate::{
     gui::state::GUIState,
     transport::WebrtcTransport,
-    video::{self, ScreenCapturer},
+    video::{self, Frame, ScreenCapturer},
 };
 
 pub(super) struct GUI {
     frame_rx: Option<mpsc::Receiver<super::video::Frame>>,
     webrtc: Arc<WebrtcTransport>,
     async_rt: Arc<tokio::runtime::Runtime>,
-    state: Arc<AtomicPtr<GUIState>>, // Should be fast, thats why we use raw pointers here
+    state: Arc<Mutex<GUIState>>, // Faster with AtomicPtr???
 }
 
 impl GUI {
     pub fn new(webrtc: Arc<WebrtcTransport>, async_rt: Arc<tokio::runtime::Runtime>) -> Self {
-        let shared_state = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(GUIState::Idle))));
+        let shared_state = Arc::new(Mutex::new(GUIState::Idle));
         let share_state_clone = Arc::clone(&shared_state);
         let events = webrtc.subscribe();
 
@@ -42,12 +43,22 @@ impl GUI {
 
 impl eframe::App for GUI {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        // Ordering: Receiving messages only from webrtc events handling event loop
-        // Safety: Event loop & GUI contructor stores only valid values
-        let curr_state = unsafe { &*self.state.load(Ordering::Acquire) };
+        let curr_state = &mut *self.state.blocking_lock();
 
         match curr_state {
             GUIState::Idle | GUIState::Streaming => {
+                match curr_state {
+                    GUIState::Streaming => {
+                        self.async_rt
+                            .spawn(Arc::clone(&self.webrtc).send_frame(Frame {
+                                width: 0,
+                                height: 0,
+                                data: vec![123, 123, 123, 123, 123, 123, 123, 123, 123, 123],
+                            }));
+                        *curr_state = GUIState::Idle
+                    }
+                    _ => {}
+                }
                 egui::TopBottomPanel::bottom("buttons").show(ctx, |ui| {
                     ui.horizontal_centered(|ui| {
                         if ui.button("Toggle stream").clicked() {
@@ -72,8 +83,9 @@ impl eframe::App for GUI {
                                 }
                                 GUIState::Streaming => {
                                     self.frame_rx = None;
+                                    *curr_state = GUIState::Idle
                                 }
-                                // Safety: Stream button available while either idling or streaming
+                                // Safety: outer match case with mutex
                                 _ => unreachable!(),
                             }
                         }
@@ -81,7 +93,11 @@ impl eframe::App for GUI {
                 });
             }
 
-            GUIState::Watching(_) => { /* Do not render stream button while watching */ }
+            GUIState::Watching(_) => {
+                egui::TopBottomPanel::bottom("buttons").show(ctx, |ui| {
+                    ui.button("HIII").clicked();
+                });
+            }
         }
     }
 }

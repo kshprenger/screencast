@@ -16,19 +16,19 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, mpsc, watch, Mutex, MutexGuard};
+use tokio::sync::{mpsc, Mutex, MutexGuard};
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
-use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::{APIBuilder, API};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTPCodecType};
+use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
@@ -121,12 +121,6 @@ impl WebrtcTransport {
         }));
     }
 
-    async fn setup_transceivers(self: &Arc<Self>, conn: &RTCPeerConnection) {
-        conn.add_transceiver_from_kind(RTPCodecType::Video, None)
-            .await
-            .unwrap(); // Safe because valid options were provided
-    }
-
     async fn setup_on_track(self: &Arc<Self>, conn: &RTCPeerConnection) {
         let self_clone = Arc::clone(&self);
         conn.on_track(Box::new(move |track, _, _| {
@@ -189,8 +183,6 @@ impl WebrtcTransport {
                 self.setup_background_ice_candidates_transmitting(&conn, from)
                     .await;
 
-                self.setup_transceivers(&conn).await;
-
                 self.setup_on_track(&conn).await;
 
                 let mut conns_state = self.conns_state.lock().await;
@@ -224,7 +216,7 @@ impl WebrtcTransport {
                 self.conns_state.lock().await.peers.remove(&from);
             }
             SignallingMessage::Offer { sdp } => {
-                tracing::info!("Received SDP Offer from peer:{from}, offer:{sdp:?}");
+                tracing::info!("Received SDP Offer from peer:{from}");
 
                 let mut peer_state = self.conns_state.lock().await;
 
@@ -237,6 +229,8 @@ impl WebrtcTransport {
                         return;
                     }
                 };
+
+                // self.setup_on_track(&conn).await;
 
                 if let Err(err) = conn.set_remote_description(sdp).await {
                     tracing::error!("Failed to set remote description: {err}");
@@ -269,7 +263,7 @@ impl WebrtcTransport {
                 }
             }
             SignallingMessage::Answer { sdp } => {
-                tracing::info!("Received SDP Answer from: {from}, answer: {:?}", sdp);
+                tracing::info!("Received SDP Answer from: {from}");
                 let mut state = self.conns_state.lock().await;
 
                 match state.state {
@@ -278,13 +272,22 @@ impl WebrtcTransport {
                     }
                     State::GatheringAnswers(remain) => match remain {
                         1 => {
-                            state.events_tx.clone().and_then(|chan| {
-                                if let Err(err) = chan.send(WebrtcEvents::GatheredAnswers) {
-                                    tracing::error!("Could not send GatheredAnswers event: {err}");
-                                }
-                                state.state = State::Idle;
-                                Some(())
-                            });
+                            state
+                                .events_tx
+                                .clone()
+                                .and_then(|chan| {
+                                    if let Err(err) = chan.send(WebrtcEvents::GatheredAnswers) {
+                                        tracing::error!(
+                                            "Could not send GatheredAnswers event: {err}"
+                                        );
+                                    }
+                                    state.state = State::Idle;
+                                    Some(())
+                                })
+                                .or_else(|| {
+                                    tracing::warn!("No GUI event subscription");
+                                    Some(())
+                                });
                         }
                         _ => state.state = State::GatheringAnswers(remain - 1),
                     },
@@ -350,6 +353,7 @@ impl WebrtcTransport {
     }
 
     pub async fn create_and_send_offers(self: Arc<Self>) {
+        self.create_and_add_track().await;
         let mut peers_state = self.conns_state.lock().await;
 
         peers_state.state = State::GatheringAnswers(peers_state.peers.len());
@@ -386,23 +390,25 @@ impl WebrtcTransport {
         }
     }
 
-    pub async fn create_and_add_track(self: Arc<Self>) {
+    pub async fn create_and_add_track(self: &Arc<Self>) {
         let track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
-                mime_type: "video/h264".to_owned(),
+                mime_type: MIME_TYPE_H264.to_owned(),
                 ..Default::default()
             },
             "video".to_owned(),
             "webrtc-rs".to_owned(),
         ));
 
-        futures_util::future::join_all(self.conns_state.lock().await.peers.values().map(
-            |conn| async {
-                let track_clone = Arc::clone(&track);
-                conn.add_track(track_clone).await.unwrap();
-            },
-        ))
+        let mut conn_state = self.conns_state.lock().await;
+
+        futures_util::future::join_all(conn_state.peers.values().map(|conn| async {
+            let track_clone = Arc::clone(&track);
+            conn.add_track(track_clone).await.unwrap();
+        }))
         .await;
+
+        conn_state.track = Some(track);
     }
 
     pub fn subscribe(self: &Arc<Self>) -> mpsc::UnboundedReceiver<WebrtcEvents> {
@@ -424,7 +430,7 @@ impl WebrtcTransport {
                     tracing::error!("Could not write frame: {err}")
                 }
             }
-            None => tracing::warn!("Could not find trac to write frames"),
+            None => tracing::warn!("Could not find track to write frame"),
         }
     }
 

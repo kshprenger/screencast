@@ -1,26 +1,24 @@
-use std::sync::{
-    atomic::{AtomicPtr, Ordering},
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 use crate::{gui::GUIState, transport::WebrtcEvents};
 
 pub(super) async fn handle_events(
     mut events_rx: mpsc::UnboundedReceiver<WebrtcEvents>,
-    state: Arc<AtomicPtr<GUIState>>,
+    state: Arc<Mutex<GUIState>>,
 ) {
     while let Some(event) = events_rx.recv().await {
+        tracing::debug!("Got event from webrtc: {event:?}");
+        let mut state = state.lock().await;
         match event {
-            WebrtcEvents::GatheredAnswers => {}
+            WebrtcEvents::GatheredAnswers => {
+                *state = GUIState::Streaming;
+            }
             WebrtcEvents::TrackArrived(track) => {
-                // Ordering: Notify GUI loop about state changing
-                state.store(
-                    Box::into_raw(Box::new(GUIState::Watching(track))),
-                    Ordering::Release,
-                );
+                *state = GUIState::Watching(track);
             }
         }
     }
+    tracing::warn!("Event channel from webrtc was closed")
 }
