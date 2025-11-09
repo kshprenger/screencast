@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use std::sync::Mutex;
 use tracing_subscriber::FmtSubscriber;
 
 mod capture;
@@ -39,6 +40,11 @@ fn main() {
         ..Default::default()
     };
 
+    let gui_init_state = Arc::new(Mutex::new(gui::GUIState::Idle));
+
+    let gui_event_manager =
+        gui::GUIEventManager::new_shared(webrtc_gui, async_rt_gui, Arc::clone(&gui_init_state));
+
     eframe::run_native(
         "Screencast",
         options,
@@ -46,7 +52,7 @@ fn main() {
             // This gives us image support
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Ok(Box::new(gui::GUI::new(webrtc_gui, async_rt_gui)))
+            Ok(Box::new(gui::GUI::new(gui_init_state, gui_event_manager)))
         }),
     )
     .unwrap();

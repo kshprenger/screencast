@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
