@@ -42,27 +42,30 @@ impl WebrtcNetwork {
     }
 
     async fn setup_on_track(self: &Arc<Self>, conn: &RTCPeerConnection) {
-        let self_clone = Arc::clone(&self);
+        let self_clone1 = Arc::clone(&self);
         conn.on_track(Box::new(move |track, _, _| {
-            tracing::info!("PISYA");
-            let (frame_tx, frame_rx) = mpsc::channel(100);
-            self_clone
-                .conns_state
-                .blocking_lock()
-                .events_tx
-                .as_ref()
-                .and_then(|chan| {
-                    // Notify GUI about stream
-                    if let Err(err) = chan.send(WebrtcEvents::TrackArrived(frame_rx)) {
-                        tracing::error!("Could not send track event to GUI: {err}");
-                    }
-                    Some(())
-                })
-                .or_else(|| {
-                    tracing::warn!("No GUI event subscription");
-                    Some(())
-                });
+            let self_clone2 = Arc::clone(&self_clone1);
+            tracing::info!("Received remote track");
             Box::pin(async move {
+                let (frame_tx, frame_rx) = mpsc::channel(100);
+                self_clone2
+                    .conns_state
+                    .lock()
+                    .await
+                    .events_tx
+                    .as_ref()
+                    .and_then(|chan| {
+                        // Notify GUI about stream
+                        if let Err(err) = chan.send(WebrtcEvents::TrackArrived(frame_rx)) {
+                            tracing::error!("Could not send track event to GUI: {err}");
+                        }
+                        Some(())
+                    })
+                    .or_else(|| {
+                        tracing::warn!("No GUI event subscription");
+                        Some(())
+                    });
+
                 while let Ok((rtp_packet, _)) = track.read_rtp().await {
                     if let Err(err) = frame_tx
                         .send(Frame {

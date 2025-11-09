@@ -9,6 +9,7 @@ pub(super) async fn handle_events(
     state: Arc<Mutex<GUIState>>,
 ) {
     while let Some(event) = events_rx.recv().await {
+        tracing::info!("Got event from network: {event}");
         let mut state = state.lock().await;
         match event {
             WebrtcEvents::GatheredAnswers => {
