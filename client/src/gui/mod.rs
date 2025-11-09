@@ -1,19 +1,16 @@
 mod event_loop;
 mod state;
 
-use std::sync::{
-    atomic::{AtomicPtr, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 use eframe::egui;
 use std::sync::mpsc;
 use tokio::sync::Mutex;
 
 use crate::{
+    capture::{self, Frame, ScreenCapturer},
     gui::state::GUIState,
     network::WebrtcNetwork,
-    capture::{self, Frame, ScreenCapturer},
 };
 
 pub(super) struct GUI {

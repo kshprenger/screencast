@@ -35,7 +35,7 @@ fn main() {
     });
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1080.0, 720.0]),
+        viewport: egui::ViewportBuilder::default().with_fullscreen(true),
         ..Default::default()
     };
 
