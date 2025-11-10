@@ -48,6 +48,12 @@ impl ScreenCapturer for XCapCapturer {
         match self.monitor.video_recorder() {
             Ok((recorder, xcap_frame_rx)) => {
                 let (frame_tx, frame_rx) = mpsc::sync_channel::<Frame>(FRAME_BUFFER_SIZE);
+                recorder.start().unwrap();
+
+                // Magic trick
+                // FIXME
+                std::mem::forget(recorder);
+
                 std::thread::spawn(move || loop {
                     match xcap_frame_rx.recv() {
                         Ok(frame) => {
@@ -67,7 +73,6 @@ impl ScreenCapturer for XCapCapturer {
                         }
                     }
                 });
-                recorder.start().unwrap();
                 return Ok(frame_rx);
             }
             Err(err) => {

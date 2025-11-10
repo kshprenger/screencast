@@ -61,7 +61,7 @@ impl GUIEventManager {
     }
 
     async fn handle_events(self: Arc<Self>) {
-        let mut events_rx = self.webrtc.subscribe();
+        let mut events_rx = self.webrtc.subscribe().await;
         while let Some(event) = events_rx.recv().await {
             tracing::info!("Got event from network: {event}");
             match event {

@@ -328,9 +328,9 @@ impl WebrtcNetwork {
         conn_state.track = Some(track);
     }
 
-    pub fn subscribe(self: &Arc<Self>) -> mpsc::UnboundedReceiver<WebrtcEvents> {
+    pub async fn subscribe(self: &Arc<Self>) -> mpsc::UnboundedReceiver<WebrtcEvents> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.conns_state.blocking_lock().events_tx = Some(tx);
+        self.conns_state.lock().await.events_tx = Some(tx);
         rx
     }
 

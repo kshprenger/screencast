@@ -87,7 +87,7 @@ impl H264Stream {
                 }
             }
 
-            tracing::info!("Frame receiver closed, encoder thread terminating");
+            tracing::warn!("Frame receiver closed, encoder thread terminated");
             *done_clone.lock().unwrap() = true;
         });
 
