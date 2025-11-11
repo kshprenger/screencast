@@ -1,14 +1,10 @@
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
-use tokio::sync::mpsc;
 use uuid::Uuid;
-use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::{peer_connection::RTCPeerConnection, rtp::packet::Packet};
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
-use crate::{
-    capture::Frame,
-    network::{WebrtcEvents, WebrtcNetwork},
-};
+use crate::network::{H264Decoder, WebrtcEvents, WebrtcNetwork};
 
 impl WebrtcNetwork {
     async fn setup_on_ice_candidate(self: &Arc<Self>, conn: &RTCPeerConnection, to: Uuid) {
@@ -42,8 +38,30 @@ impl WebrtcNetwork {
         conn.on_track(Box::new(move |track, _, _| {
             let self_clone2 = Arc::clone(&self_clone1);
             tracing::info!("Received remote track");
+
+            let (frame_tx, frame_rx) = mpsc::channel();
+            let (packet_tx, packet_rx) = mpsc::channel::<Packet>();
+
+            std::thread::spawn(move || {
+                let mut decoder = H264Decoder::new();
+                match decoder.decode_rtp_packet(&packet_rx.recv().unwrap().payload) {
+                    Ok(Some(frame)) => {
+                        if let Err(err) = frame_tx.send(frame) {
+                            tracing::error!("Could not send decoded frame to GUI: {err}");
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        // More data needed, continue accumulating
+                        tracing::trace!("Awaiting more RTP packets to complete frame");
+                    }
+                    Err(err) => {
+                        tracing::error!("H.264 decoding error: {err}");
+                    }
+                }
+            });
+
             Box::pin(async move {
-                let (frame_tx, frame_rx) = mpsc::channel(100);
                 self_clone2
                     .conns_state
                     .lock()
@@ -51,7 +69,7 @@ impl WebrtcNetwork {
                     .events_tx
                     .as_ref()
                     .and_then(|chan| {
-                        // Notify GUI about stream
+                        // Notify GUI about stream with decoded frame channel
                         if let Err(err) = chan.send(WebrtcEvents::TrackArrived(frame_rx)) {
                             tracing::error!("Could not send track event to GUI: {err}");
                         }
@@ -63,17 +81,11 @@ impl WebrtcNetwork {
                     });
 
                 while let Ok((rtp_packet, _)) = track.read_rtp().await {
-                    if let Err(err) = frame_tx
-                        .send(Frame {
-                            width: 1080,
-                            height: 720,
-                            data: rtp_packet.payload.to_vec(),
-                        })
-                        .await
-                    {
-                        tracing::error!("Could not send frame to GUI: {err}");
-                    }
+                    // Decode H.264 RTP packet payload to RGBA frame
+                    packet_tx.send(rtp_packet);
                 }
+
+                tracing::warn!("Track ended for peer");
             })
         }));
     }
