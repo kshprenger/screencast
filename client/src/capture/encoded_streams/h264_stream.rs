@@ -5,8 +5,11 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use openh264::encoder::Encoder;
-use openh264::formats::YUVBuffer;
+use ffmpeg_next::encoder::video::Video;
+use ffmpeg_next::format::Pixel;
+use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
+use ffmpeg_next::sys::*;
+use ffmpeg_next::{codec, frame, media};
 
 use crate::capture::{Frame, VideoErrors};
 
@@ -17,7 +20,7 @@ use crate::capture::{Frame, VideoErrors};
 ///
 /// The reader assumes input frames are in BGRA format (as provided by `XCapCapturer`).
 /// It automatically converts to YUV420 (I420) format required by the H.264 encoder using
-/// BT.601 color space conversion with 4:2:0 chroma subsampling.
+/// FFmpeg's high-performance scaling context.
 ///
 /// # Threading
 ///
@@ -30,12 +33,13 @@ pub struct H264Stream {
     buffer: Arc<Mutex<VecDeque<u8>>>,
     /// Flag to signal when the encoder thread is done
     done: Arc<Mutex<bool>>,
-    /// Handle to the encoder thread
-    _encoder_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl H264Stream {
     pub fn new(frame_rx: mpsc::Receiver<Frame>) -> Result<Self, VideoErrors> {
+        // Initialize FFmpeg (safe to call multiple times)
+        let _ = ffmpeg_next::init();
+
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
         let done = Arc::new(Mutex::new(false));
 
@@ -44,58 +48,12 @@ impl H264Stream {
 
         // Spawn the encoder thread
         let encoder_thread = thread::spawn(move || {
-            // Initialize the encoder
-            let mut encoder = match Encoder::new() {
-                Ok(enc) => enc,
-                Err(err) => {
-                    tracing::error!("Failed to initialize H.264 encoder: {}", err);
-                    return;
-                }
-            };
-
-            while let Ok(frame) = frame_rx.recv() {
-                // Convert BGRA/RGBA frame to YUV420 for encoding
-                let yuv_frame = match convert_to_yuv420(&frame) {
-                    Ok(yuv) => yuv,
-                    Err(err) => {
-                        tracing::error!("Failed to convert frame to YUV420: {}", err);
-                        continue;
-                    }
-                };
-
-                // Encode the frame
-                match encoder.encode(&yuv_frame) {
-                    Ok(bitstream) => {
-                        // Extract all NAL units from the encoded bitstream
-                        let num_layers = bitstream.num_layers();
-                        for layer_idx in 0..num_layers {
-                            if let Some(layer) = bitstream.layer(layer_idx) {
-                                let num_nals = layer.nal_count();
-                                for nal_idx in 0..num_nals {
-                                    if let Some(nal_unit_data) = layer.nal_unit(nal_idx) {
-                                        let mut buf = buffer_clone.lock().unwrap();
-                                        buf.extend(nal_unit_data.iter().cloned());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::error!("H.264 encoding failed: {}", err);
-                        continue;
-                    }
-                }
+            if let Err(e) = run_encoder(frame_rx, buffer_clone, done_clone) {
+                tracing::error!("Encoder error: {}", e);
             }
-
-            tracing::warn!("Frame receiver closed, encoder thread terminated");
-            *done_clone.lock().unwrap() = true;
         });
 
-        Ok(Self {
-            buffer,
-            done,
-            _encoder_thread: Some(encoder_thread),
-        })
+        Ok(Self { buffer, done })
     }
 }
 
@@ -129,58 +87,96 @@ impl Read for H264Stream {
     }
 }
 
-/// Convert a frame (assumed BGRA or RGBA) to YUV420 format for H.264 encoding
-fn convert_to_yuv420(frame: &Frame) -> Result<YUVBuffer, VideoErrors> {
-    let width = frame.width as usize;
-    let height = frame.height as usize;
-    let bytes_per_pixel = 4; // Assuming BGRA or RGBA
+fn run_encoder(
+    frame_rx: mpsc::Receiver<Frame>,
+    buffer: Arc<Mutex<VecDeque<u8>>>,
+    done: Arc<Mutex<bool>>,
+) -> Result<(), VideoErrors> {
+    let codec = codec::encoder::find(codec::Id::H264).unwrap();
+    let mut video = codec::context::Context::new_with_codec(codec)
+        .encoder()
+        .video()
+        .unwrap();
 
-    // Ensure width and height are multiples of 2
-    if width % 2 != 0 || height % 2 != 0 {
-        return Err(VideoErrors::CannotCapture);
-    }
+    video.set_width(1080);
+    video.set_height(720);
+    video.set_format(Pixel::YUV420P);
+    video.set_frame_rate(Some((30, 1)));
+    video.set_time_base((1, 30));
 
-    if frame.data.len() < width * height * bytes_per_pixel {
-        return Err(VideoErrors::CannotCapture);
-    }
+    let mut encoder = video.open().unwrap();
 
-    // Allocate YUV420 buffer (3/2 bytes per pixel: Y plane + U and V planes)
-    let y_size = width * height;
-    let uv_size = (width / 2) * (height / 2);
-    let expected_size = y_size + 2 * uv_size;
-    let mut yuv_data = vec![0u8; expected_size];
+    let mut scaler: Option<Context> = None;
+    let mut prev_width = 0;
+    let mut prev_height = 0;
 
-    let (y_plane, uv_planes) = yuv_data.split_at_mut(y_size);
-    let (u_plane, v_plane) = uv_planes.split_at_mut(uv_size);
+    while let Ok(frame_data) = frame_rx.recv() {
+        let width = frame_data.width as u32;
+        let height = frame_data.height as u32;
 
-    // Convert BGRA to YUV420 using BT.601 color space conversion
-    for y in 0..height {
-        for x in 0..width {
-            let pixel_idx = (y * width + x) * bytes_per_pixel;
-            let b = frame.data[pixel_idx] as f32;
-            let g = frame.data[pixel_idx + 1] as f32;
-            let r = frame.data[pixel_idx + 2] as f32;
-            // Alpha channel at pixel_idx + 3 is ignored
+        // Reinitialize scaler if dimensions changed
+        if scaler.is_none() || width != prev_width || height != prev_height {
+            scaler = Context::get(
+                Pixel::BGRA,
+                width,
+                height,
+                Pixel::YUV420P,
+                width,
+                height,
+                Flags::BILINEAR,
+            )
+            .ok();
 
-            // Y plane: standard BT.601 luma conversion
-            let y_val = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
-            y_plane[y * width + x] = y_val;
-
-            // U and V planes: sample only for every 2x2 block (chroma subsampling 4:2:0)
-            if x % 2 == 0 && y % 2 == 0 {
-                let u_val =
-                    ((-0.168736 * r - 0.331264 * g + 0.5 * b + 128.0) as i32).clamp(0, 255) as u8;
-                let v_val =
-                    ((0.5 * r - 0.418688 * g - 0.081312 * b + 128.0) as i32).clamp(0, 255) as u8;
-
-                let uv_idx = (y / 2) * (width / 2) + (x / 2);
-                u_plane[uv_idx] = u_val;
-                v_plane[uv_idx] = v_val;
+            if scaler.is_none() {
+                tracing::error!("Failed to create scaling context");
+                continue;
             }
+
+            prev_width = width;
+            prev_height = height;
+
+            // Update encoder dimensions if they changed
+            encoder.set_width(width);
+            encoder.set_height(height);
+        }
+
+        let mut input_frame = frame::Video::new(Pixel::BGRA, width, height);
+        let mut output_frame = frame::Video::new(Pixel::YUV420P, width, height);
+
+        // BGRA is 4 bytes per pixel
+        let expected_size = (input_frame.width() * input_frame.height() * 4) as usize;
+
+        let frame_data_slice = frame_data.data.as_slice();
+        let input_frame_data = input_frame.data_mut(0);
+
+        // Alignment 2944 vs expected 2940 issue????
+        input_frame_data[..expected_size].copy_from_slice(&frame_data_slice);
+
+        // Scale/convert the frame
+        if let Some(ref mut ctx) = scaler {
+            if ctx.run(&input_frame, &mut output_frame).is_err() {
+                tracing::error!("Failed to scale frame");
+                continue;
+            }
+        }
+
+        // Encode the frame
+        if encoder.send_frame(&output_frame).is_err() {
+            tracing::error!("Failed to send frame to encoder");
+            continue;
+        }
+
+        // Receive encoded packets
+        let mut encoded_packet = ffmpeg_next::packet::Packet::empty();
+
+        while encoder.receive_packet(&mut encoded_packet).is_ok() {
+            let data = encoded_packet.data().ok_or(VideoErrors::CannotCapture)?;
+            let mut buf = buffer.lock().unwrap();
+            buf.extend(data);
         }
     }
 
-    // Create YUVBuffer from the prepared data
-    // Safe because we've validated dimensions are multiples of 2 and buffer size is correct
-    Ok(YUVBuffer::from_vec(yuv_data, width, height))
+    tracing::warn!("Frame receiver closed, encoder thread terminated");
+    *done.lock().unwrap() = true;
+    Ok(())
 }

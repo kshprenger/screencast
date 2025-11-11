@@ -25,3 +25,4 @@ thiserror = "2.0.17"
 webrtc_model = { version = "0.1.0", path = "../webrtc_model" }
 bytes = "1.10.1"
 openh264 = "0.7.1"
+ffmpeg-next = "8.0.0"

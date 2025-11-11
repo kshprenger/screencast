@@ -5,10 +5,8 @@ mod state;
 
 pub use events::WebrtcEvents;
 
-use crate::capture::Frame;
 use crate::network::errors::NetworkErrors;
 use crate::network::state::State;
-use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
