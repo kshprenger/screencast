@@ -11,11 +11,7 @@ use crate::{
 };
 
 impl WebrtcNetwork {
-    async fn setup_background_ice_candidates_transmitting(
-        self: &Arc<Self>,
-        conn: &RTCPeerConnection,
-        to: Uuid,
-    ) {
+    async fn setup_on_ice_candidate(self: &Arc<Self>, conn: &RTCPeerConnection, to: Uuid) {
         let self_clone1 = Arc::clone(self);
         conn.on_ice_candidate(Box::new(move |candidate| {
             let self_clone2 = Arc::clone(&self_clone1);
@@ -89,9 +85,7 @@ impl WebrtcNetwork {
             .await
             .unwrap(); // Safety: Valid config was provided
 
-        self.setup_background_ice_candidates_transmitting(&conn, from)
-            .await;
-
+        self.setup_on_ice_candidate(&conn, from).await;
         self.setup_on_track(&conn).await;
 
         conn

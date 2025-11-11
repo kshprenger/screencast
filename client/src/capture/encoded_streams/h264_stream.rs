@@ -5,11 +5,9 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use ffmpeg_next::encoder::video::Video;
 use ffmpeg_next::format::Pixel;
 use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
-use ffmpeg_next::sys::*;
-use ffmpeg_next::{codec, frame, media};
+use ffmpeg_next::{codec, frame};
 
 use crate::capture::{Frame, VideoErrors};
 
@@ -37,7 +35,7 @@ pub struct H264Stream {
 
 impl H264Stream {
     pub fn new(frame_rx: mpsc::Receiver<Frame>) -> Result<Self, VideoErrors> {
-        // Initialize FFmpeg (safe to call multiple times)
+        // Safe to call multiple times
         let _ = ffmpeg_next::init();
 
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
@@ -46,10 +44,9 @@ impl H264Stream {
         let buffer_clone = Arc::clone(&buffer);
         let done_clone = Arc::clone(&done);
 
-        // Spawn the encoder thread
-        let encoder_thread = thread::spawn(move || {
+        thread::spawn(move || {
             if let Err(e) = run_encoder(frame_rx, buffer_clone, done_clone) {
-                tracing::error!("Encoder error: {}", e);
+                tracing::error!("Encoder thread error: {e}");
             }
         });
 
@@ -166,9 +163,7 @@ fn run_encoder(
             continue;
         }
 
-        // Receive encoded packets
         let mut encoded_packet = ffmpeg_next::packet::Packet::empty();
-
         while encoder.receive_packet(&mut encoded_packet).is_ok() {
             let data = encoded_packet.data().ok_or(VideoErrors::CannotCapture)?;
             let mut buf = buffer.lock().unwrap();
