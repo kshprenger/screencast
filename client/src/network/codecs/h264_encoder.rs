@@ -23,17 +23,17 @@ use crate::capture::{Frame, VideoErrors};
 /// # Threading
 ///
 /// The encoder thread runs continuously, pulling frames from the receiver channel and
-/// encoding them. Reading from the H264Stream will block briefly if the buffer is empty,
+/// encoding them. Reading from the H264Encoder will block briefly if the buffer is empty,
 /// allowing the encoder thread to catch up. The thread terminates when the frame channel
 /// is closed.
-pub struct H264Stream {
+pub struct H264Encoder {
     /// Buffer holding encoded data ready to be read
     buffer: Arc<Mutex<VecDeque<u8>>>,
     /// Flag to signal when the encoder thread is done
     done: Arc<Mutex<bool>>,
 }
 
-impl H264Stream {
+impl H264Encoder {
     pub fn new(frame_rx: mpsc::Receiver<Frame>) -> Result<Self, VideoErrors> {
         // Safe to call multiple times
         let _ = ffmpeg_next::init();
@@ -54,7 +54,7 @@ impl H264Stream {
     }
 }
 
-impl Read for H264Stream {
+impl Read for H264Encoder {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let mut buffer = self.buffer.lock().unwrap();
@@ -165,7 +165,7 @@ fn run_encoder(
 
         let mut encoded_packet = ffmpeg_next::packet::Packet::empty();
         while encoder.receive_packet(&mut encoded_packet).is_ok() {
-            let data = encoded_packet.data().ok_or(VideoErrors::CannotCapture)?;
+            let data = encoded_packet.data().unwrap();
             let mut buf = buffer.lock().unwrap();
             buf.extend(data);
         }

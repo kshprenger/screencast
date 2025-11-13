@@ -1,12 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use capture::ScreenCapturer;
+use webrtc::media::io::h264_writer::H264Writer;
 use webrtc::media::{io::h264_reader::H264Reader, Sample};
 
 use std::sync::Mutex;
 
+use crate::network::H264Encoder;
+
 use crate::{
-    capture::{self, H264Stream},
+    capture::{self},
     gui::GUIState,
     network::{WebrtcEvents, WebrtcNetwork},
 };
@@ -35,9 +38,8 @@ impl GUIEventManager {
             },
         };
 
-        let h264_stream = H264Stream::new(frame_rx).unwrap();
+        let h264_stream = H264Encoder::new(frame_rx).unwrap();
         let mut h264_reader = H264Reader::new(h264_stream, 1_048_576);
-
         let webrtc = Arc::clone(&self.webrtc);
 
         tokio::spawn(async move {

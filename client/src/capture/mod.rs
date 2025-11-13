@@ -1,8 +1,6 @@
-mod encoded_streams;
 mod errors;
 mod xcap;
 
-pub use encoded_streams::H264Stream;
 pub use errors::VideoErrors;
 pub use xcap::XCapCapturer;
 

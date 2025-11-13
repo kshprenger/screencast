@@ -1,10 +1,13 @@
 use std::sync::{mpsc, Arc};
 
 use uuid::Uuid;
-use webrtc::{peer_connection::RTCPeerConnection, rtp::packet::Packet};
+use webrtc::{
+    media::io::sample_builder::SampleBuilder, peer_connection::RTCPeerConnection,
+    rtp::codecs::h264::H264Packet,
+};
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
-use crate::network::{H264Decoder, WebrtcEvents, WebrtcNetwork};
+use crate::network::{codecs, WebrtcEvents, WebrtcNetwork};
 
 impl WebrtcNetwork {
     async fn setup_on_ice_candidate(self: &Arc<Self>, conn: &RTCPeerConnection, to: Uuid) {
@@ -39,29 +42,9 @@ impl WebrtcNetwork {
             let self_clone2 = Arc::clone(&self_clone1);
             tracing::info!("Received remote track");
 
-            let (frame_tx, frame_rx) = mpsc::channel();
-            let (packet_tx, packet_rx) = mpsc::channel::<Packet>();
-
-            std::thread::spawn(move || {
-                let mut decoder = H264Decoder::new();
-                match decoder.decode_rtp_packet(&packet_rx.recv().unwrap().payload) {
-                    Ok(Some(frame)) => {
-                        if let Err(err) = frame_tx.send(frame) {
-                            tracing::error!("Could not send decoded frame to GUI: {err}");
-                            return;
-                        }
-                    }
-                    Ok(None) => {
-                        // More data needed, continue accumulating
-                        tracing::trace!("Awaiting more RTP packets to complete frame");
-                    }
-                    Err(err) => {
-                        tracing::error!("H.264 decoding error: {err}");
-                    }
-                }
-            });
-
             Box::pin(async move {
+                let mut sample_builder = SampleBuilder::new(90, H264Packet::default(), 90000);
+                let (decoder, frame_rx) = codecs::H264Decoder::start_decoding().unwrap();
                 self_clone2
                     .conns_state
                     .lock()
@@ -81,10 +64,11 @@ impl WebrtcNetwork {
                     });
 
                 while let Ok((rtp_packet, _)) = track.read_rtp().await {
-                    // Decode H.264 RTP packet payload to RGBA frame
-                    packet_tx.send(rtp_packet);
+                    sample_builder.push(rtp_packet);
+                    while let Some(sample) = sample_builder.pop() {
+                        decoder.feed_data(sample.data).unwrap()
+                    }
                 }
-
                 tracing::warn!("Track ended for peer");
             })
         }));
