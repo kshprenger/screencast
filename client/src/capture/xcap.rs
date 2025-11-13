@@ -57,6 +57,7 @@ impl ScreenCapturer for XCapCapturer {
                 std::thread::spawn(move || loop {
                     match xcap_frame_rx.recv() {
                         Ok(frame) => {
+                            tracing::info!("Got frame from xcap");
                             let new_frame = Frame {
                                 width: frame.width,
                                 height: frame.height,
@@ -68,8 +69,7 @@ impl ScreenCapturer for XCapCapturer {
                             }
                         }
                         Err(_) => {
-                            tracing::warn!("Frame tx is closed. Terminating task");
-                            return;
+                            tracing::warn!("No frame");
                         }
                     }
                 });

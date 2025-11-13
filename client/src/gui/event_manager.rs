@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
 use capture::ScreenCapturer;
-use webrtc::media::io::h264_writer::H264Writer;
 use webrtc::media::{io::h264_reader::H264Reader, Sample};
 
 use std::sync::Mutex;
@@ -24,7 +23,7 @@ pub struct GUIEventManager {
 
 impl GUIEventManager {
     async fn start_sending_frames(self: &Arc<Self>) {
-        let frame_rx = match capture::XCapCapturer::new() {
+        let frame_rx = match capture::ScapCapturer::new() {
             Err(err) => {
                 tracing::error!("Could start stream: {err}");
                 return;
@@ -39,7 +38,7 @@ impl GUIEventManager {
         };
 
         let h264_stream = H264Encoder::new(frame_rx).unwrap();
-        let mut h264_reader = H264Reader::new(h264_stream, 1_048_576);
+        let mut h264_reader = H264Reader::new(h264_stream, 65536);
         let webrtc = Arc::clone(&self.webrtc);
 
         tokio::spawn(async move {
