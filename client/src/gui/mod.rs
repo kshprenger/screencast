@@ -32,25 +32,31 @@ impl eframe::App for GUI {
 
         match curr_state {
             GUIState::Watching(frame_rx) => {
+                let mut frame_received = false;
+
                 // Try to receive a frame without blocking
                 if let Ok(frame) = frame_rx.try_recv() {
+                    frame_received = true;
                     // Use the Frame struct fields
                     let width = frame.width as usize;
                     let height = frame.height as usize;
-                    let bgra_data = &frame.data;
 
                     // Create or update texture
-                    let color_image = ColorImage::from_rgba_unmultiplied(
-                        [width, height],
-                        bgra_data
-                            .chunks_exact(4)
-                            .flat_map(|bgra| [bgra[2], bgra[1], bgra[0], bgra[3]]) // B,G,R,A -> R,G,B,A
-                            .collect::<Vec<_>>()
-                            .as_slice(),
-                    );
+                    let color_image =
+                        ColorImage::from_rgba_premultiplied([width, height], &frame.data);
 
-                    self.texture =
-                        Some(ctx.load_texture("video_frame", color_image, TextureOptions::LINEAR));
+                    match &mut self.texture {
+                        Some(texture) => {
+                            texture.set(color_image, TextureOptions::NEAREST);
+                        }
+                        None => {
+                            self.texture = Some(ctx.load_texture(
+                                "video_frame",
+                                color_image,
+                                TextureOptions::NEAREST,
+                            ));
+                        }
+                    }
                 }
 
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -84,7 +90,9 @@ impl eframe::App for GUI {
                 });
 
                 // Request repaint for smooth video playback
-                ctx.request_repaint();
+                if frame_received {
+                    ctx.request_repaint();
+                }
             }
             _ => {
                 egui::TopBottomPanel::bottom("buttons").show(ctx, |ui| {

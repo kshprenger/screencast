@@ -123,7 +123,6 @@ fn run_decoder(
                         let mut decoded_frame = frame::Video::empty();
                         match decoder.receive_frame(&mut decoded_frame) {
                             Ok(()) => {
-                                // Convert the decoded frame to RGB and send it
                                 if let Err(e) =
                                     process_decoded_frame(&decoded_frame, &frame_tx, &mut scaler)
                                 {
@@ -184,7 +183,7 @@ fn process_decoded_frame(
             input_format,
             width,
             height,
-            Pixel::BGRA,
+            Pixel::RGBA,
             1080,
             720,
             Flags::BILINEAR,
@@ -202,12 +201,14 @@ fn process_decoded_frame(
     }
 
     // Create output frame in RGB format
-    let mut bgra_frame = frame::Video::new(Pixel::BGRA, 1080, 720);
+    let mut bgra_frame = frame::Video::new(Pixel::RGBA, 1080, 720);
 
     // Convert to RGB
     if let Some(ref mut ctx) = scaler {
-        ctx.run(decoded_frame, &mut bgra_frame)
-            .map_err(|_| VideoErrors::CannotCapture)?;
+        ctx.run(decoded_frame, &mut bgra_frame).map_err(|err| {
+            tracing::error!("{err}");
+            VideoErrors::CannotCapture
+        })?;
     }
 
     let frame = Frame {

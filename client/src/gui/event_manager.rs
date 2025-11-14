@@ -38,7 +38,7 @@ impl GUIEventManager {
         };
 
         let h264_stream = H264Encoder::new(frame_rx).unwrap();
-        let mut h264_reader = H264Reader::new(h264_stream, 65536);
+        let mut h264_reader = H264Reader::new(h264_stream, 16000);
         let webrtc = Arc::clone(&self.webrtc);
 
         tokio::spawn(async move {

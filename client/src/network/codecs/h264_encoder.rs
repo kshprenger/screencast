@@ -78,7 +78,7 @@ impl Read for H264Encoder {
             }
 
             // Brief sleep to avoid busy-waiting
-            thread::sleep(std::time::Duration::from_millis(1));
+            // thread::sleep(std::time::Duration::from_millis(1));
             spin_loop(); // Optimize
         }
     }
@@ -99,7 +99,7 @@ fn run_encoder(
     video.set_height(720);
     video.set_format(Pixel::YUV420P);
     video.set_frame_rate(Some((60, 1)));
-    video.set_time_base((1, 30));
+    video.set_time_base((1, 60));
 
     let mut encoder = video.open().unwrap();
 
