@@ -53,7 +53,6 @@ impl GUIEventManager {
                 webrtc
                     .send_sample(&Sample {
                         data: nal.data.freeze(),
-                        duration: Duration::from_secs(1),
                         ..Default::default()
                     })
                     .await;

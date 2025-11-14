@@ -185,8 +185,8 @@ fn process_decoded_frame(
             width,
             height,
             Pixel::BGRA,
-            width,
-            height,
+            1080,
+            720,
             Flags::BILINEAR,
         )
         .ok();
@@ -202,7 +202,7 @@ fn process_decoded_frame(
     }
 
     // Create output frame in BGRA format
-    let mut bgra_frame = frame::Video::new(Pixel::BGRA, width, height);
+    let mut bgra_frame = frame::Video::new(Pixel::BGRA, 1080, 720);
 
     // Convert to BGRA
     if let Some(ref mut ctx) = scaler {
@@ -210,34 +210,10 @@ fn process_decoded_frame(
             .map_err(|_| VideoErrors::CannotCapture)?;
     }
 
-    // Extract BGRA data
-    let bgra_data = bgra_frame.data(0);
-    let stride = bgra_frame.stride(0);
-
-    // Create Frame struct
-    let mut frame_data = Vec::with_capacity((width * height * 4) as usize);
-
-    // Copy data line by line to handle stride differences
-    for y in 0..height {
-        let line_start = (y as usize) * stride;
-        let line_end = line_start + (width as usize * 4);
-        if line_end <= bgra_data.len() {
-            frame_data.extend_from_slice(&bgra_data[line_start..line_end]);
-        } else {
-            // Handle case where stride calculation doesn't match expected data
-            tracing::error!(
-                "Frame data size mismatch: expected line end {}, got buffer size {}",
-                line_end,
-                bgra_data.len()
-            );
-            return Err(VideoErrors::CannotCapture);
-        }
-    }
-
     let frame = Frame {
         width,
         height,
-        data: frame_data,
+        data: bgra_frame.data(0).to_vec(),
     };
 
     // Send the frame

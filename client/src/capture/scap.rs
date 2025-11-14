@@ -1,13 +1,12 @@
 use super::errors::VideoErrors;
 use super::{Frame, ScreenCapturer};
-use image::imageops::FilterType::CatmullRom;
 use scap::{
     capturer::{Capturer, Options},
     Target,
 };
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // Buffer size for frames (2 seconds at 60fps)
 const FRAME_BUFFER_SIZE: usize = 120;
@@ -44,7 +43,6 @@ impl ScreenCapturer for ScapCapturer {
         let target = self.target.clone();
 
         thread::spawn(move || {
-            // Configure capture options for better performance
             let options = Options {
                 target: Some(target),
                 fps: 60,
@@ -71,7 +69,6 @@ impl ScreenCapturer for ScapCapturer {
             loop {
                 match capturer.get_next_frame() {
                     Ok(frame) => {
-                        tracing::info!("GOT scap frame");
                         let our_frame = match frame {
                             scap::frame::Frame::BGRA(bgra_frame) => Frame {
                                 width: bgra_frame.width as u32,
@@ -81,7 +78,6 @@ impl ScreenCapturer for ScapCapturer {
                             _ => unreachable!(),
                         };
 
-                        // Send frame to consumer
                         if let Err(_) = frame_tx.send(our_frame) {
                             tracing::warn!("Frame receiver closed, stopping capture");
                             break;
@@ -105,12 +101,14 @@ impl ScreenCapturer for ScapCapturer {
 
 impl Drop for ScapCapturer {
     fn drop(&mut self) {
-        tracing::info!("ScapCapturer dropped");
+        tracing::warn!("ScapCapturer dropped");
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use tokio::time::Instant;
+
     use super::*;
     use std::time::Duration;
 

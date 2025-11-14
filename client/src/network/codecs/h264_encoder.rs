@@ -98,7 +98,7 @@ fn run_encoder(
     video.set_width(1080);
     video.set_height(720);
     video.set_format(Pixel::YUV420P);
-    video.set_frame_rate(Some((30, 1)));
+    video.set_frame_rate(Some((60, 1)));
     video.set_time_base((1, 30));
 
     let mut encoder = video.open().unwrap();
@@ -146,8 +146,8 @@ fn run_encoder(
         let frame_data_slice = frame_data.data.as_slice();
         let input_frame_data = input_frame.data_mut(0);
 
-        // Alignment 2944 vs expected 2940 issue????
-        input_frame_data[..expected_size].copy_from_slice(&frame_data_slice);
+        // Safe
+        input_frame_data.copy_from_slice(&frame_data_slice);
 
         // Scale/convert the frame
         if let Some(ref mut ctx) = scaler {

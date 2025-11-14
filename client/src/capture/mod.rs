@@ -4,7 +4,6 @@ mod xcap;
 
 pub use errors::VideoErrors;
 pub use scap::ScapCapturer;
-pub use xcap::XCapCapturer;
 
 #[derive(Debug, Clone)]
 pub struct Frame {
