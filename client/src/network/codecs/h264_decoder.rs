@@ -10,10 +10,10 @@ use ffmpeg_next::{codec, frame, packet};
 
 use crate::capture::{Frame, VideoErrors};
 
-/// H264 decoder that converts WebRTC H264 samples to BGRA frames
+/// H264 decoder that converts WebRTC H264 samples to RGB frames
 ///
 /// This decoder receives H264-encoded data packets (typically from WebRTC)
-/// and decodes them into BGRA frames that match the Frame format defined
+/// and decodes them into RGB frames that match the Frame format defined
 /// in the capture module.
 ///
 /// # Usage
@@ -27,7 +27,7 @@ use crate::capture::{Frame, VideoErrors};
 ///
 /// // Receive decoded frames
 /// while let Ok(frame) = frame_rx.recv() {
-///     // Process BGRA frame
+///     // Process RGB frame
 /// }
 /// ```
 pub struct H264Decoder {
@@ -123,7 +123,7 @@ fn run_decoder(
                         let mut decoded_frame = frame::Video::empty();
                         match decoder.receive_frame(&mut decoded_frame) {
                             Ok(()) => {
-                                // Convert the decoded frame to BGRA and send it
+                                // Convert the decoded frame to RGB and send it
                                 if let Err(e) =
                                     process_decoded_frame(&decoded_frame, &frame_tx, &mut scaler)
                                 {
@@ -165,7 +165,7 @@ fn run_decoder(
     Ok(())
 }
 
-/// Process a decoded frame and convert it to BGRA format
+/// Process a decoded frame and convert it to RGB format
 fn process_decoded_frame(
     decoded_frame: &frame::Video,
     frame_tx: &mpsc::Sender<Frame>,
@@ -193,7 +193,7 @@ fn process_decoded_frame(
 
         if scaler.is_none() {
             tracing::error!(
-                "Failed to create scaling context for {}x{}  -> BGRA",
+                "Failed to create scaling context for {}x{}  -> RGB",
                 width,
                 height,
             );
@@ -201,18 +201,18 @@ fn process_decoded_frame(
         }
     }
 
-    // Create output frame in BGRA format
+    // Create output frame in RGB format
     let mut bgra_frame = frame::Video::new(Pixel::BGRA, 1080, 720);
 
-    // Convert to BGRA
+    // Convert to RGB
     if let Some(ref mut ctx) = scaler {
         ctx.run(decoded_frame, &mut bgra_frame)
             .map_err(|_| VideoErrors::CannotCapture)?;
     }
 
     let frame = Frame {
-        width,
-        height,
+        width: 1080,
+        height: 720,
         data: bgra_frame.data(0).to_vec(),
     };
 

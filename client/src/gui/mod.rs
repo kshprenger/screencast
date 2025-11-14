@@ -37,11 +37,17 @@ impl eframe::App for GUI {
                     // Use the Frame struct fields
                     let width = frame.width as usize;
                     let height = frame.height as usize;
-                    let rgba_data = &frame.data;
+                    let bgra_data = &frame.data;
 
                     // Create or update texture
-                    let color_image =
-                        ColorImage::from_rgba_unmultiplied([width, height], rgba_data);
+                    let color_image = ColorImage::from_rgba_unmultiplied(
+                        [width, height],
+                        bgra_data
+                            .chunks_exact(4)
+                            .flat_map(|bgra| [bgra[2], bgra[1], bgra[0], bgra[3]]) // B,G,R,A -> R,G,B,A
+                            .collect::<Vec<_>>()
+                            .as_slice(),
+                    );
 
                     self.texture =
                         Some(ctx.load_texture("video_frame", color_image, TextureOptions::LINEAR));

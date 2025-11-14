@@ -16,7 +16,7 @@ use crate::capture::{Frame, VideoErrors};
 ///
 /// # Color Space Conversion
 ///
-/// The reader assumes input frames are in BGRA format (as provided by `XCapCapturer`).
+/// The reader assumes input frames are in RGB format (as provided by `XCapCapturer`).
 /// It automatically converts to YUV420 (I420) format required by the H.264 encoder using
 /// FFmpeg's high-performance scaling context.
 ///
@@ -140,8 +140,8 @@ fn run_encoder(
         let mut input_frame = frame::Video::new(Pixel::BGRA, width, height);
         let mut output_frame = frame::Video::new(Pixel::YUV420P, width, height);
 
-        // BGRA is 4 bytes per pixel
-        let expected_size = (input_frame.width() * input_frame.height() * 4) as usize;
+        // RGB is 3 bytes per pixel
+        let expected_size = (input_frame.width() * input_frame.height() * 3) as usize;
 
         let frame_data_slice = frame_data.data.as_slice();
         let input_frame_data = input_frame.data_mut(0);

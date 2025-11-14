@@ -155,7 +155,7 @@ mod tests {
             assert_eq!(
                 frame.data.len(),
                 (frame.width * frame.height * 4) as usize,
-                "RGBA data should be width * height * 4 bytes"
+                "BGRA data should be width * height * 4 bytes"
             );
 
             println!(
