@@ -88,71 +88,63 @@ fn run_decoder(
         .unwrap();
 
     let mut scaler: Option<Context> = None;
-    let mut packet_buffer = VecDeque::new();
 
     while *running.lock().unwrap() {
         match data_rx.recv() {
             Ok(data) => {
-                packet_buffer.extend(data);
+                if data.is_empty() {
+                    continue;
+                }
+
+                // Create FFmpeg packet
+                let packet = packet::Packet::copy(&data);
+
+                // Send packet to decoder
+                match decoder.send_packet(&packet) {
+                    Ok(()) => {
+                        // Try to receive decoded frames
+                        loop {
+                            let mut decoded_frame = frame::Video::empty();
+                            match decoder.receive_frame(&mut decoded_frame) {
+                                Ok(()) => {
+                                    if let Err(e) = process_decoded_frame(
+                                        &decoded_frame,
+                                        &frame_tx,
+                                        &mut scaler,
+                                    ) {
+                                        tracing::error!("Failed to process decoded frame: {e}");
+                                    }
+                                }
+                                Err(ffmpeg_next::Error::Other {
+                                    errno: ffmpeg_next::error::EAGAIN,
+                                }) => {
+                                    // No more frames available right now
+                                    break;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Error receiving frame from decoder: {e}");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(ffmpeg_next::Error::Other {
+                        errno: ffmpeg_next::error::EAGAIN,
+                    }) => {
+                        // Decoder needs more data
+                        tracing::warn!("Decoder needs more data, but we are not buffering. This might be an issue.");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!("Error sending packet to decoder: {e}");
+                        // Try to continue with next packet
+                        break;
+                    }
+                }
             }
             Err(e) => {
                 tracing::error!("Error occured {e}, stopping decoder");
                 break;
-            }
-        }
-
-        // Process buffered data
-        while !packet_buffer.is_empty() {
-            // Try to extract a complete packet
-            // For H264, we need to find NAL units. This is a simplified approach
-            // that assumes each data chunk is a complete packet.
-            let packet_data: Vec<u8> = packet_buffer.drain(..).collect();
-
-            if packet_data.is_empty() {
-                break;
-            }
-
-            // Create FFmpeg packet
-            let packet = packet::Packet::copy(&packet_data);
-
-            // Send packet to decoder
-            match decoder.send_packet(&packet) {
-                Ok(()) => {
-                    // Try to receive decoded frames
-                    loop {
-                        let mut decoded_frame = frame::Video::empty();
-                        match decoder.receive_frame(&mut decoded_frame) {
-                            Ok(()) => {
-                                if let Err(e) =
-                                    process_decoded_frame(&decoded_frame, &frame_tx, &mut scaler)
-                                {
-                                    tracing::error!("Failed to process decoded frame: {e}");
-                                }
-                            }
-                            Err(ffmpeg_next::Error::Other {
-                                errno: ffmpeg_next::error::EAGAIN,
-                            }) => {
-                                // No more frames available right now
-                                break;
-                            }
-                            Err(e) => {
-                                tracing::error!("Error receiving frame from decoder: {e}");
-                                break;
-                            }
-                        }
-                    }
-                }
-                Err(ffmpeg_next::Error::Other {
-                    errno: ffmpeg_next::error::EAGAIN,
-                }) => {
-                    // Decoder needs more data
-                    break;
-                }
-                Err(e) => {
-                    tracing::error!("Error sending packet to decoder: {e}");
-                    // Try to continue with next packet
-                    break;
-                }
             }
         }
 

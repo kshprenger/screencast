@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use capture::ScreenCapturer;
 use webrtc::media::{io::h264_reader::H264Reader, Sample};
+use webrtc::rtp::codecs::h264::H264Payloader;
 
 use std::sync::Mutex;
 
@@ -38,7 +39,7 @@ impl GUIEventManager {
         };
 
         let h264_stream = H264Encoder::new(frame_rx).unwrap();
-        let mut h264_reader = H264Reader::new(h264_stream, 16000);
+        let mut h264_reader = H264Reader::new(h264_stream, 32000);
         let webrtc = Arc::clone(&self.webrtc);
 
         tokio::spawn(async move {
@@ -56,6 +57,7 @@ impl GUIEventManager {
                         ..Default::default()
                     })
                     .await;
+                tokio::time::sleep(Duration::from_millis(16)).await;
             }
         });
     }

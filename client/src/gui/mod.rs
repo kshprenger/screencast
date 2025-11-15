@@ -89,10 +89,7 @@ impl eframe::App for GUI {
                     }
                 });
 
-                // Request repaint for smooth video playback
-                if frame_received {
-                    ctx.request_repaint();
-                }
+                ctx.request_repaint();
             }
             _ => {
                 egui::TopBottomPanel::bottom("buttons").show(ctx, |ui| {

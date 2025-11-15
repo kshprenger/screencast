@@ -19,6 +19,11 @@ RUN apt-get update && \
     libgbm-dev \
     libwayland-dev \
     ffmpeg \
+    libdbus-1-dev \
+    libavutil-dev \
+    libavformat-dev \
+    libavfilter-dev \
+    libavdevice-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rustup target add x86_64-unknown-linux-gnu
