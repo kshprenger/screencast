@@ -140,9 +140,6 @@ fn run_encoder(
         let mut input_frame = frame::Video::new(Pixel::BGRA, width, height);
         let mut output_frame = frame::Video::new(Pixel::YUV420P, width, height);
 
-        // RGB is 3 bytes per pixel
-        let expected_size = (input_frame.width() * input_frame.height() * 3) as usize;
-
         let frame_data_slice = frame_data.data.as_slice();
         let input_frame_data = input_frame.data_mut(0);
 

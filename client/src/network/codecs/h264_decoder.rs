@@ -137,8 +137,6 @@ fn run_decoder(
                     }
                     Err(e) => {
                         tracing::error!("Error sending packet to decoder: {e}");
-                        // Try to continue with next packet
-                        break;
                     }
                 }
             }

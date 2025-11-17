@@ -78,6 +78,10 @@ impl ScreenCapturer for ScapCapturer {
                             _ => unreachable!(),
                         };
 
+                        if our_frame.width == 0 || our_frame.height == 0 {
+                            continue;
+                        }
+
                         if let Err(_) = frame_tx.send(our_frame) {
                             tracing::warn!("Frame receiver closed, stopping capture");
                             break;
