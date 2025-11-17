@@ -6,8 +6,6 @@ pub enum NetworkErrors {
     ConnectionIsNotOpened,
     #[error("Failed tp send control message")]
     SendControlFailed,
-    #[error("Failed to send data message")]
-    SendDataFailed,
     #[error("Failed to (de)serialize message")]
     SerdeError(#[from] serde_json::Error),
 }

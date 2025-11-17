@@ -32,18 +32,13 @@ impl eframe::App for GUI {
 
         match curr_state {
             GUIState::Watching(frame_rx) => {
-                let mut frame_received = false;
-
-                // Try to receive a frame without blocking
                 if let Ok(frame) = frame_rx.try_recv() {
-                    frame_received = true;
-                    // Use the Frame struct fields
                     let width = frame.width as usize;
                     let height = frame.height as usize;
+                    let frame_data = frame.data;
 
-                    // Create or update texture
                     let color_image =
-                        ColorImage::from_rgba_premultiplied([width, height], &frame.data);
+                        ColorImage::from_rgba_premultiplied([width, height], &frame_data);
 
                     match &mut self.texture {
                         Some(texture) => {
@@ -61,10 +56,8 @@ impl eframe::App for GUI {
 
                 egui::CentralPanel::default().show(ctx, |ui| {
                     if let Some(texture) = &self.texture {
-                        // Get available space
                         let available_size = ui.available_size();
 
-                        // Calculate aspect ratio preserving size
                         let texture_size = texture.size_vec2();
                         let aspect_ratio = texture_size.x / texture_size.y;
 

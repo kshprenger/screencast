@@ -96,7 +96,6 @@ fn run_decoder(
                     continue;
                 }
 
-                // Create FFmpeg packet
                 let packet = packet::Packet::copy(&data);
 
                 // Send packet to decoder

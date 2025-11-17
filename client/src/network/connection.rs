@@ -1,4 +1,5 @@
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 use webrtc::{
@@ -63,12 +64,51 @@ impl WebrtcNetwork {
                         Some(())
                     });
 
+                // Batch RTP packets for 1 seconds before sorting and decoding
+                let mut rtp_batch: Vec<(u16, webrtc::rtp::packet::Packet)> = Vec::new();
+                let batch_timeout = Duration::from_secs(1);
+                let mut batch_start = Instant::now();
+
                 while let Ok((rtp_packet, _)) = track.read_rtp().await {
-                    sample_builder.push(rtp_packet);
-                    while let Some(sample) = sample_builder.pop() {
-                        decoder.feed_data(sample.data).unwrap()
+                    let seq_num = rtp_packet.header.sequence_number;
+                    rtp_batch.push((seq_num, rtp_packet));
+
+                    if batch_start.elapsed() >= batch_timeout && !rtp_batch.is_empty() {
+                        rtp_batch.sort_by_key(|(seq, _)| *seq);
+
+                        tracing::debug!(
+                            "Processing batch of {} RTP packets, sorted by sequence number",
+                            rtp_batch.len()
+                        );
+
+                        for (seq, rtp_packet) in rtp_batch.drain(..) {
+                            tracing::debug!("Processing RTP packet with sequence number: {}", seq);
+                            sample_builder.push(rtp_packet);
+                            while let Some(sample) = sample_builder.pop() {
+                                decoder.feed_data(sample.data).unwrap();
+                            }
+                        }
+
+                        batch_start = Instant::now();
                     }
                 }
+
+                if !rtp_batch.is_empty() {
+                    rtp_batch.sort_by_key(|(seq, _)| *seq);
+                    tracing::debug!("Processing final batch of {} RTP packets", rtp_batch.len());
+
+                    for (seq, rtp_packet) in rtp_batch {
+                        tracing::debug!(
+                            "Processing final RTP packet with sequence number: {}",
+                            seq
+                        );
+                        sample_builder.push(rtp_packet);
+                        while let Some(sample) = sample_builder.pop() {
+                            decoder.feed_data(sample.data).unwrap();
+                        }
+                    }
+                }
+
                 tracing::warn!("Track ended for peer");
             })
         }));
