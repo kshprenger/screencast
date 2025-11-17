@@ -7,6 +7,7 @@ use scap::{
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 // Buffer size for frames (2 seconds at 60fps)
 const FRAME_BUFFER_SIZE: usize = 120;
@@ -37,7 +38,10 @@ impl ScreenCapturer for ScapCapturer {
         Ok(Self { target })
     }
 
-    fn start_capturing(&self) -> Result<mpsc::Receiver<Frame>, VideoErrors> {
+    fn start_capturing(
+        &self,
+        ctx: CancellationToken,
+    ) -> Result<mpsc::Receiver<Frame>, VideoErrors> {
         let (frame_tx, frame_rx) = mpsc::sync_channel::<Frame>(FRAME_BUFFER_SIZE);
 
         let target = self.target.clone();
@@ -67,6 +71,9 @@ impl ScreenCapturer for ScapCapturer {
             tracing::info!("Starting scap capture loop");
 
             loop {
+                if ctx.is_cancelled() {
+                    break;
+                }
                 match capturer.get_next_frame() {
                     Ok(frame) => {
                         let our_frame = match frame {
@@ -95,8 +102,8 @@ impl ScreenCapturer for ScapCapturer {
                     }
                 }
             }
-
-            tracing::info!("Scap capture thread terminating");
+            capturer.stop_capture();
+            tracing::warn!("Scap capture thread terminating");
         });
 
         Ok(frame_rx)
@@ -125,7 +132,7 @@ mod tests {
     #[test]
     fn test_scap_performance() {
         let capturer = ScapCapturer::new().unwrap();
-        let frame_rx = capturer.start_capturing().unwrap();
+        let frame_rx = capturer.start_capturing(CancellationToken::new()).unwrap();
 
         let start = Instant::now();
         let mut count = 0;
@@ -151,7 +158,7 @@ mod tests {
     #[test]
     fn test_frame_format() {
         let capturer = ScapCapturer::new().unwrap();
-        let frame_rx = capturer.start_capturing().unwrap();
+        let frame_rx = capturer.start_capturing(CancellationToken::new()).unwrap();
 
         if let Ok(frame) = frame_rx.recv_timeout(Duration::from_secs(2)) {
             assert!(frame.width > 0, "Frame should have positive width");

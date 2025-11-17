@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use tracing_subscriber::FmtSubscriber;
 
 mod capture;

@@ -42,7 +42,6 @@ impl WebrtcNetwork {
         conn.on_track(Box::new(move |track, _, _| {
             let self_clone2 = Arc::clone(&self_clone1);
             tracing::info!("Received remote track");
-
             Box::pin(async move {
                 let mut sample_builder = SampleBuilder::new(30, H264Packet::default(), 50000);
                 let (decoder, frame_rx) = codecs::H264Decoder::start_decoding().unwrap();

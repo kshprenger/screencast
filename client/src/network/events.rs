@@ -3,6 +3,7 @@ use std::fmt::Display;
 pub enum WebrtcEvents {
     GatheredAnswers,
     TrackArrived(std::sync::mpsc::Receiver<crate::capture::Frame>),
+    TrackRemoved,
 }
 
 impl Display for WebrtcEvents {
@@ -10,6 +11,7 @@ impl Display for WebrtcEvents {
         match self {
             WebrtcEvents::GatheredAnswers => f.write_str("GatheredAnswers"),
             WebrtcEvents::TrackArrived(_) => f.write_str("TrackArrived"),
+            WebrtcEvents::TrackRemoved => f.write_str("TrackRemoved"),
         }
     }
 }

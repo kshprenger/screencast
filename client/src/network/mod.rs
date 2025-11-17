@@ -7,6 +7,7 @@ mod state;
 pub use codecs::*;
 
 pub use events::WebrtcEvents;
+use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
 // pub use h264_decoder::H264Decoder;
 
 use crate::network::errors::NetworkErrors;
@@ -52,6 +53,7 @@ struct PeersState {
     ws_tx: Option<WsTx>,
     track: Option<Arc<TrackLocalStaticSample>>,
     peers: HashMap<Uuid, RTCPeerConnection>,
+    rtp_senders: Vec<Arc<RTCRtpSender>>,
 }
 
 impl WebrtcNetwork {
@@ -267,6 +269,7 @@ impl WebrtcNetwork {
                 track: None,
                 events_tx: None,
                 state: State::Idle,
+                rtp_senders: Vec::new(),
             }),
         })
     }
@@ -309,6 +312,35 @@ impl WebrtcNetwork {
         }
     }
 
+    pub async fn remove_track(self: Arc<Self>) {
+        let mut state = self.conns_state.lock().await;
+
+        futures_util::future::join_all(state.peers.values().zip(state.rtp_senders.iter()).map(
+            |(conn, sender)| async {
+                conn.remove_track(sender).await.unwrap();
+            },
+        ))
+        .await;
+
+        state.track = None;
+        state.rtp_senders.clear();
+
+        state
+            .events_tx
+            .clone()
+            .and_then(|chan| {
+                if let Err(err) = chan.send(WebrtcEvents::TrackRemoved) {
+                    tracing::error!("Could not send GatheredAnswers event: {err}");
+                }
+                state.state = State::Idle;
+                Some(())
+            })
+            .or_else(|| {
+                tracing::warn!("No GUI event subscription");
+                Some(())
+            });
+    }
+
     pub async fn create_and_add_track(self: &Arc<Self>) {
         let track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
@@ -321,12 +353,14 @@ impl WebrtcNetwork {
 
         let mut conn_state = self.conns_state.lock().await;
 
-        futures_util::future::join_all(conn_state.peers.values().map(|conn| async {
-            let track_clone = Arc::clone(&track);
-            conn.add_track(track_clone).await.unwrap();
-        }))
-        .await;
+        let rtp_senders =
+            futures_util::future::join_all(conn_state.peers.values().map(|conn| async {
+                let track_clone = Arc::clone(&track);
+                conn.add_track(track_clone).await.unwrap()
+            }))
+            .await;
 
+        conn_state.rtp_senders = rtp_senders;
         conn_state.track = Some(track);
     }
 

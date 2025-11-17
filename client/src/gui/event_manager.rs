@@ -1,10 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use capture::ScreenCapturer;
+use tokio_util::sync::CancellationToken;
 use webrtc::media::{io::h264_reader::H264Reader, Sample};
-use webrtc::rtp::codecs::h264::H264Payloader;
 
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 
 use crate::network::H264Encoder;
 
@@ -23,13 +23,13 @@ pub struct GUIEventManager {
 }
 
 impl GUIEventManager {
-    async fn start_sending_frames(self: &Arc<Self>) {
+    async fn start_sending_frames(self: &Arc<Self>, ctx: CancellationToken) {
         let frame_rx = match capture::ScapCapturer::new() {
             Err(err) => {
                 tracing::error!("Could start stream: {err}");
                 return;
             }
-            Ok(capturer) => match capturer.start_capturing() {
+            Ok(capturer) => match capturer.start_capturing(ctx.clone()) {
                 Err(err) => {
                     tracing::error!("Could start stream: {err}");
                     return;
@@ -51,26 +51,39 @@ impl GUIEventManager {
                         break;
                     }
                 };
-                webrtc
-                    .send_sample(&Sample {
-                        data: nal.data.freeze(),
-                        ..Default::default()
-                    })
-                    .await;
+                let sample = Sample {
+                    data: nal.data.freeze(),
+                    ..Default::default()
+                };
+
+                tokio::select! {
+                    _ = webrtc.send_sample(&sample) => {},
+                    _ = ctx.cancelled() => {
+                        tracing::warn!("Terminated sample sending task");
+                        return;
+                    }
+                }
             }
         });
     }
     async fn handle_events(self: Arc<Self>) {
         let mut events_rx = self.webrtc.subscribe().await;
+        let mut ctx = CancellationToken::new();
+
         while let Some(event) = events_rx.recv().await {
             tracing::info!("Got event from network: {event}");
             match event {
                 WebrtcEvents::GatheredAnswers => {
-                    *self.state.lock().unwrap() = GUIState::Streaming;
-                    self.start_sending_frames().await
+                    *self.state.lock().await = GUIState::Streaming;
+                    self.start_sending_frames(ctx.clone()).await
                 }
                 WebrtcEvents::TrackArrived(track) => {
-                    *self.state.lock().unwrap() = GUIState::Watching(track);
+                    *self.state.lock().await = GUIState::Watching(track);
+                }
+                WebrtcEvents::TrackRemoved => {
+                    *self.state.lock().await = GUIState::Idle;
+                    ctx.cancel();
+                    ctx = CancellationToken::new();
                 }
             }
         }
@@ -99,7 +112,6 @@ impl GUIEventManager {
     }
 
     pub fn stop_stream(self: &Arc<Self>) {
-        *self.state.lock().unwrap() = GUIState::Idle;
-        // conn.remove_track???
+        self.async_rt.spawn(Arc::clone(&self.webrtc).remove_track());
     }
 }

@@ -8,7 +8,7 @@ pub use state::GUIState;
 use std::sync::Arc;
 
 use eframe::egui;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 
 pub(super) struct GUI {
     event_manager: Arc<GUIEventManager>,
@@ -28,7 +28,7 @@ impl GUI {
 
 impl eframe::App for GUI {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        let curr_state = &mut *self.state.lock().unwrap();
+        let curr_state = &mut *self.state.blocking_lock();
 
         match curr_state {
             GUIState::Watching(frame_rx) => {
