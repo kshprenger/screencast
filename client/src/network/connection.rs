@@ -72,7 +72,7 @@ impl WebrtcNetwork {
                 std::thread::spawn(move || {
                     let feedable_reader = FeedableReader::new();
                     let feedable_reader_clone = feedable_reader.clone();
-                    let mut nal_builder = H264Reader::new(feedable_reader, 30000);
+                    let mut nal_builder = H264Reader::new(feedable_reader, 60000);
                     loop {
                         let data = data_rx.blocking_recv().unwrap();
                         feedable_reader_clone.feed(&data);
