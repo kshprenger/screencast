@@ -58,10 +58,10 @@ impl Read for H264Encoder {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let mut buffer = self.buffer.lock().unwrap();
-
             // If there's data in the buffer, copy it to the read buffer
             if !buffer.is_empty() {
                 let bytes_to_copy = std::cmp::min(buf.len(), buffer.len());
+                tracing::info!("Bytes to copy: {}", bytes_to_copy);
                 for i in 0..bytes_to_copy {
                     buf[i] = buffer.pop_front().unwrap();
                 }
@@ -106,6 +106,7 @@ fn run_encoder(
     let mut scaler: Option<Context> = None;
     let mut prev_width = 0;
     let mut prev_height = 0;
+    let mut frame_num = 0;
 
     while let Ok(frame_data) = frame_rx.recv() {
         let width = frame_data.width as u32;
@@ -153,6 +154,9 @@ fn run_encoder(
                 continue;
             }
         }
+
+        output_frame.set_pts(Some(frame_num));
+        frame_num += 1;
 
         // Encode the frame
         if encoder.send_frame(&output_frame).is_err() {
