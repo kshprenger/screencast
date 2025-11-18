@@ -61,7 +61,6 @@ impl Read for H264Encoder {
             // If there's data in the buffer, copy it to the read buffer
             if !buffer.is_empty() {
                 let bytes_to_copy = std::cmp::min(buf.len(), buffer.len());
-                tracing::info!("Bytes to copy: {}", bytes_to_copy);
                 for i in 0..bytes_to_copy {
                     buf[i] = buffer.pop_front().unwrap();
                 }

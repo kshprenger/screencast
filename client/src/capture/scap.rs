@@ -110,12 +110,6 @@ impl ScreenCapturer for ScapCapturer {
     }
 }
 
-impl Drop for ScapCapturer {
-    fn drop(&mut self) {
-        tracing::warn!("ScapCapturer dropped");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use tokio::time::Instant;

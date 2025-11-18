@@ -2,13 +2,15 @@ mod codecs;
 mod connection;
 mod errors;
 mod events;
+mod reader;
 mod state;
 
+use bytes::Bytes;
 pub use codecs::*;
 
 pub use events::WebrtcEvents;
-use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
-// pub use h264_decoder::H264Decoder;
+use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
+use webrtc::data_channel::RTCDataChannel;
 
 use crate::network::errors::NetworkErrors;
 use crate::network::state::State;
@@ -51,9 +53,8 @@ struct PeersState {
     state: State,
     events_tx: Option<mpsc::UnboundedSender<WebrtcEvents>>, // Webrtc --events--> GUI
     ws_tx: Option<WsTx>,
-    track: Option<Arc<TrackLocalStaticSample>>,
     peers: HashMap<Uuid, RTCPeerConnection>,
-    rtp_senders: Vec<Arc<RTCRtpSender>>,
+    data_channels: Vec<Arc<RTCDataChannel>>,
 }
 
 impl WebrtcNetwork {
@@ -266,16 +267,15 @@ impl WebrtcNetwork {
             conns_state: Mutex::new(PeersState {
                 ws_tx: None,
                 peers: HashMap::new(),
-                track: None,
                 events_tx: None,
                 state: State::Idle,
-                rtp_senders: Vec::new(),
+                data_channels: Vec::new(),
             }),
         })
     }
 
     pub async fn create_and_send_offers(self: Arc<Self>) {
-        self.create_and_add_track().await;
+        self.create_data_channels().await;
         let mut peers_state = self.conns_state.lock().await;
 
         peers_state.state = State::GatheringAnswers(peers_state.peers.len());
@@ -313,17 +313,13 @@ impl WebrtcNetwork {
     }
 
     pub async fn remove_track(self: Arc<Self>) {
+        tracing::warn!("Removing track...");
         let mut state = self.conns_state.lock().await;
 
-        futures_util::future::join_all(state.peers.values().zip(state.rtp_senders.iter()).map(
-            |(conn, sender)| async {
-                conn.remove_track(sender).await.unwrap();
-            },
-        ))
+        futures_util::future::join_all(state.data_channels.iter().map(|channel| async {
+            channel.close().await.unwrap();
+        }))
         .await;
-
-        state.track = None;
-        state.rtp_senders.clear();
 
         state
             .events_tx
@@ -341,27 +337,18 @@ impl WebrtcNetwork {
             });
     }
 
-    pub async fn create_and_add_track(self: &Arc<Self>) {
-        let track = Arc::new(TrackLocalStaticSample::new(
-            RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_H264.to_owned(),
-                ..Default::default()
-            },
-            "video".to_owned(),
-            "webrtc-rs".to_owned(),
-        ));
-
+    pub async fn create_data_channels(self: &Arc<Self>) {
         let mut conn_state = self.conns_state.lock().await;
 
-        let rtp_senders =
+        let data_channels =
             futures_util::future::join_all(conn_state.peers.values().map(|conn| async {
-                let track_clone = Arc::clone(&track);
-                conn.add_track(track_clone).await.unwrap()
+                conn.create_data_channel("video", Some(RTCDataChannelInit::default()))
+                    .await
+                    .unwrap()
             }))
             .await;
 
-        conn_state.rtp_senders = rtp_senders;
-        conn_state.track = Some(track);
+        conn_state.data_channels = data_channels;
     }
 
     pub async fn subscribe(self: &Arc<Self>) -> mpsc::UnboundedReceiver<WebrtcEvents> {
@@ -370,15 +357,12 @@ impl WebrtcNetwork {
         rx
     }
 
-    pub async fn send_sample(self: &Arc<Self>, sample: &Sample) {
-        match self.conns_state.lock().await.track.as_ref() {
-            Some(track) => {
-                if let Err(err) = track.write_sample(sample).await {
-                    tracing::error!("Could not write sample: {err}")
-                }
-            }
-            None => tracing::warn!("Could not find track to write sample"),
-        }
+    pub async fn send_buffer(self: &Arc<Self>, buffer: &Bytes) {
+        let state = self.conns_state.lock().await;
+        futures_util::future::join_all(state.data_channels.iter().map(|channel| async {
+            channel.send(buffer).await.unwrap();
+        }))
+        .await;
     }
 
     // Main loop (blocking)

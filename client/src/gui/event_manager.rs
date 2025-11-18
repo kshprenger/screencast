@@ -1,7 +1,13 @@
+use std::hint::spin_loop;
+use std::io::Read;
 use std::sync::Arc;
+use std::time::Duration;
 
+use bytes::{Bytes, BytesMut};
 use capture::ScreenCapturer;
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
+use webrtc::media::io::h264_reader::NalUnitType;
 use webrtc::media::{io::h264_reader::H264Reader, Sample};
 
 use tokio::sync::Mutex;
@@ -38,31 +44,32 @@ impl GUIEventManager {
             },
         };
 
-        let h264_stream = H264Encoder::new(frame_rx).unwrap();
-        let mut h264_reader = H264Reader::new(h264_stream, 32000);
+        let mut h264_stream = H264Encoder::new(frame_rx).unwrap();
+        // let mut h264_reader = H264Reader::new(h264_stream, 32000);
+
         let webrtc = Arc::clone(&self.webrtc);
 
         tokio::spawn(async move {
             loop {
-                let nal = match h264_reader.next_nal() {
-                    Ok(nal) => nal,
-                    Err(err) => {
-                        tracing::error!("All video frames parsed and sent: {err}");
-                        break;
-                    }
-                };
-                let sample = Sample {
-                    data: nal.data.freeze(),
-                    ..Default::default()
-                };
-
+                // let nal = match h264_reader.next_nal() {
+                //     Ok(nal) => nal,
+                //     Err(err) => {
+                //         tracing::error!("All video frames parsed and sent: {err}");
+                //         break;
+                //     }
+                // };
+                let mut buffer = [0; 16384];
+                h264_stream.read(&mut buffer).unwrap();
+                let bytes = Bytes::copy_from_slice(&buffer);
                 tokio::select! {
-                    _ = webrtc.send_sample(&sample) => {},
+                    _ = webrtc.send_buffer(&bytes) => {},
                     _ = ctx.cancelled() => {
                         tracing::warn!("Terminated sample sending task");
                         return;
                     }
                 }
+                sleep(Duration::from_millis(1)).await;
+                spin_loop();
             }
         });
     }

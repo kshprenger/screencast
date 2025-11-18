@@ -1,13 +1,18 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytes::{Buf, Bytes};
+use image::EncodableLayout;
+use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
+use webrtc::media::io::h264_reader::{H264Reader, NalUnitType};
 use webrtc::{
     media::io::sample_builder::SampleBuilder, peer_connection::RTCPeerConnection,
     rtp::codecs::h264::H264Packet,
 };
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
+use crate::network::reader::FeedableReader;
 use crate::network::{codecs, WebrtcEvents, WebrtcNetwork};
 
 impl WebrtcNetwork {
@@ -37,13 +42,12 @@ impl WebrtcNetwork {
         }));
     }
 
-    async fn setup_on_track(self: &Arc<Self>, conn: &RTCPeerConnection) {
+    async fn setup_on_data_channel(self: &Arc<Self>, conn: &RTCPeerConnection) {
         let self_clone1 = Arc::clone(&self);
-        conn.on_track(Box::new(move |track, _, _| {
+        conn.on_data_channel(Box::new(move |data_channel| {
             let self_clone2 = Arc::clone(&self_clone1);
             tracing::info!("Received remote track");
             Box::pin(async move {
-                let mut sample_builder = SampleBuilder::new(30, H264Packet::default(), 50000);
                 let (decoder, frame_rx) = codecs::H264Decoder::start_decoding().unwrap();
                 self_clone2
                     .conns_state
@@ -63,52 +67,42 @@ impl WebrtcNetwork {
                         Some(())
                     });
 
-                // Batch RTP packets for 1 seconds before sorting and decoding
-                let mut rtp_batch: Vec<(u16, webrtc::rtp::packet::Packet)> = Vec::new();
-                let batch_timeout = Duration::from_secs(1);
-                let mut batch_start = Instant::now();
+                let (data_tx, mut data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
-                while let Ok((rtp_packet, _)) = track.read_rtp().await {
-                    let seq_num = rtp_packet.header.sequence_number;
-                    rtp_batch.push((seq_num, rtp_packet));
-
-                    if batch_start.elapsed() >= batch_timeout && !rtp_batch.is_empty() {
-                        rtp_batch.sort_by_key(|(seq, _)| *seq);
-
-                        tracing::debug!(
-                            "Processing batch of {} RTP packets, sorted by sequence number",
-                            rtp_batch.len()
-                        );
-
-                        for (seq, rtp_packet) in rtp_batch.drain(..) {
-                            tracing::debug!("Processing RTP packet with sequence number: {}", seq);
-                            sample_builder.push(rtp_packet);
-                            while let Some(sample) = sample_builder.pop() {
-                                decoder.feed_data(sample.data).unwrap();
-                            }
-                        }
-
-                        batch_start = Instant::now();
-                    }
-                }
-
-                if !rtp_batch.is_empty() {
-                    rtp_batch.sort_by_key(|(seq, _)| *seq);
-                    tracing::debug!("Processing final batch of {} RTP packets", rtp_batch.len());
-
-                    for (seq, rtp_packet) in rtp_batch {
-                        tracing::debug!(
-                            "Processing final RTP packet with sequence number: {}",
-                            seq
-                        );
-                        sample_builder.push(rtp_packet);
-                        while let Some(sample) = sample_builder.pop() {
-                            decoder.feed_data(sample.data).unwrap();
+                std::thread::spawn(move || {
+                    let feedable_reader = FeedableReader::new();
+                    let feedable_reader_clone = feedable_reader.clone();
+                    let mut nal_builder = H264Reader::new(feedable_reader, 30000);
+                    loop {
+                        let data = data_rx.blocking_recv().unwrap();
+                        feedable_reader_clone.feed(&data);
+                        while let Ok(nal) = nal_builder.next_nal() {
+                            let mut nal_with_start = Vec::new();
+                            nal_with_start.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                            nal_with_start.extend_from_slice(&nal.data);
+                            decoder
+                                .feed_data(Bytes::copy_from_slice(&nal_with_start))
+                                .unwrap();
                         }
                     }
-                }
+                });
 
-                tracing::warn!("Track ended for peer");
+                data_channel.on_open(Box::new(|| {
+                    tracing::info!("Data channel opened");
+                    Box::pin(async {})
+                }));
+
+                data_channel.on_close(Box::new(|| {
+                    tracing::info!("Data channel closed");
+                    Box::pin(async {})
+                }));
+
+                data_channel.on_message(Box::new(move |message| {
+                    let data_tx_clone = data_tx.clone();
+                    Box::pin(async move {
+                        data_tx_clone.clone().send(message.data.to_vec()).unwrap();
+                    })
+                }));
             })
         }));
     }
@@ -121,7 +115,7 @@ impl WebrtcNetwork {
             .unwrap(); // Safety: Valid config was provided
 
         self.setup_on_ice_candidate(&conn, from).await;
-        self.setup_on_track(&conn).await;
+        self.setup_on_data_channel(&conn).await;
 
         conn
     }
