@@ -100,13 +100,7 @@ fn run_encoder(
     video.set_frame_rate(Some((60, 1)));
     video.set_time_base((1, 60));
 
-    let opts = [
-        ("slice-max-size", "12000"), // Max slice size in bytes
-                                     // ("tune", "zerolatency"),    // Optimize for low latency
-    ];
-    let mut encoder = video
-        .open_with(opts.iter().map(|(k, v)| (*k, *v)).collect())
-        .unwrap();
+    let mut encoder = video.open().unwrap();
 
     let mut scaler: Option<Context> = None;
     let mut prev_width = 0;
@@ -152,7 +146,6 @@ fn run_encoder(
         // Safe
         input_frame_data.copy_from_slice(&frame_data_slice);
 
-        // Scale/convert the frame
         if let Some(ref mut ctx) = scaler {
             if ctx.run(&input_frame, &mut output_frame).is_err() {
                 tracing::error!("Failed to scale frame");
@@ -163,7 +156,6 @@ fn run_encoder(
         output_frame.set_pts(Some(frame_num));
         frame_num += 1;
 
-        // Encode the frame
         if encoder.send_frame(&output_frame).is_err() {
             tracing::error!("Failed to send frame to encoder");
             continue;
@@ -173,9 +165,6 @@ fn run_encoder(
         while encoder.receive_packet(&mut encoded_packet).is_ok() {
             let data = encoded_packet.data().unwrap();
             let mut buf = buffer.lock().unwrap();
-            tracing::info!("PACKET DATA: {:02x?}", &data[..4]);
-            tracing::info!("PACKET LEN: {}", data.len());
-
             buf.extend(data);
         }
     }

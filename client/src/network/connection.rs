@@ -1,18 +1,11 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use bytes::{Buf, Bytes};
-use image::EncodableLayout;
-use tokio::sync::{mpsc, Mutex};
+use bytes::Bytes;
+use tokio::sync::mpsc;
 use uuid::Uuid;
-use webrtc::media::io::h264_reader::{H264Reader, NalUnitType};
-use webrtc::{
-    media::io::sample_builder::SampleBuilder, peer_connection::RTCPeerConnection,
-    rtp::codecs::h264::H264Packet,
-};
+use webrtc::peer_connection::RTCPeerConnection;
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
-use crate::network::reader::FeedableReader;
 use crate::network::{codecs, WebrtcEvents, WebrtcNetwork};
 
 impl WebrtcNetwork {
@@ -70,11 +63,9 @@ impl WebrtcNetwork {
                 let (data_tx, mut data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
                 std::thread::spawn(move || {
-                    // let feedable_reader = FeedableReader::new();
-                    // let feedable_reader_clone = feedable_reader.clone();
-                    // let mut nal_builder = H264Reader::new(feedable_reader, 1_048_576_00);
                     let mut buf = Vec::new();
                     let separator = [0x00, 0x00, 0x00, 0x01];
+
                     loop {
                         let data = data_rx.blocking_recv().unwrap();
                         buf.extend_from_slice(&data);
@@ -89,51 +80,12 @@ impl WebrtcNetwork {
                         if separator_positions.len() >= 2 {
                             let start = separator_positions[0];
                             let end = separator_positions[1];
-                            tracing::info!("NAL UNIT WITH SIZE: {}", end - start);
                             let nal_unit = &buf[start..end];
                             decoder
                                 .feed_data(Bytes::copy_from_slice(&nal_unit))
                                 .unwrap();
                             buf.drain(..end);
                         }
-
-                        // feedable_reader_clone.feed(&data);
-                        // while let Ok(nal) = nal_builder.next_nal() {
-                        //     let nal_type = nal.data[0] & 0x1f;
-                        //     let nal_type_name = match nal_type {
-                        //         1 => "Slice (non-IDR)",
-                        //         5 => "Slice (IDR/Keyframe)",
-                        //         6 => "SEI",
-                        //         7 => "SPS",
-                        //         8 => "PPS",
-                        //         9 => "AUD",
-                        //         _ => "Other",
-                        //     };
-
-                        //     tracing::info!(
-                        //         "NAL type: {} ({}), size: {} bytes",
-                        //         nal_type,
-                        //         nal_type_name,
-                        //         nal.data.len()
-                        //     );
-
-                        //     tracing::info!("Before extension: {:02x?}", &nal.data.as_bytes()[..6]);
-
-                        //     let mut nal_with_start = Vec::new();
-                        //     if !nal.data.starts_with(&[0x00, 0x00, 0x00, 0x01]) {
-                        //         if nal_type != 7 && nal_type != 8 && nal_type != 5 {
-                        //             continue;
-                        //         }
-                        //         nal_with_start.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
-                        //     }
-
-                        //     nal_with_start.extend_from_slice(&nal.data);
-                        //     tracing::info!("After extension: {:02x?}", &nal_with_start[..8]);
-                        //     decoder
-                        //         .feed_data(Bytes::copy_from_slice(&nal_with_start))
-                        //         .unwrap();
-                        // }
-                        // decoder.feed_data(Bytes::copy_from_slice(&data)).unwrap();
                     }
                 });
 

@@ -2,7 +2,6 @@ mod codecs;
 mod connection;
 mod errors;
 mod events;
-mod reader;
 mod state;
 
 use bytes::Bytes;
