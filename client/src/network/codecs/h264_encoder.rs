@@ -57,7 +57,6 @@ impl H264Encoder {
 impl Read for H264Encoder {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut buffer = self.buffer.lock().unwrap();
-
         if !buffer.is_empty() {
             let bytes_to_copy = std::cmp::min(buf.len(), buffer.len());
             for i in 0..bytes_to_copy {
@@ -94,7 +93,25 @@ fn run_encoder(
     video.set_frame_rate(Some((60, 1)));
     video.set_time_base((1, 60));
 
-    let mut encoder = video.open().unwrap();
+    // Configure for low-latency streaming
+    video.set_gop(60); // GOP size = 1 second at 60fps
+    video.set_max_b_frames(0); // Disable B-frames for lowest latency
+
+    // Open with low-latency options
+    let mut encoder = video
+        .open_as_with(
+            codec,
+            vec![
+                ("preset", "ultrafast"),
+                ("tune", "zerolatency"),
+                ("x264-params", "bframes=0:force-cfr=1"),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .unwrap();
+
+    // let mut encoder = video.open().unwrap();
 
     let mut scaler: Option<Context> = None;
     let mut prev_width = 0;
@@ -102,7 +119,6 @@ fn run_encoder(
     let mut frame_num = 0;
 
     while let Ok(frame_data) = frame_rx.recv() {
-        tracing::info!("Got frame from scap");
         let width = frame_data.width as u32;
         let height = frame_data.height as u32;
 
@@ -115,7 +131,7 @@ fn run_encoder(
                 Pixel::YUV420P,
                 width,
                 height,
-                Flags::BILINEAR,
+                Flags::FAST_BILINEAR,
             )
             .ok();
 

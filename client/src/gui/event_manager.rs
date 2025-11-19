@@ -47,6 +47,7 @@ impl GUIEventManager {
         let webrtc = Arc::clone(&self.webrtc);
 
         tokio::spawn(async move {
+            let mut kb = 0;
             loop {
                 let mut buffer = [0; 16384]; // This is upper bound size for webrtc on_message message
                 let n = h264_stream.read(&mut buffer).unwrap();
@@ -54,7 +55,6 @@ impl GUIEventManager {
                     continue;
                 }
                 let bytes = Bytes::copy_from_slice(&buffer[..n]);
-                tracing::info!("SENDING DATA");
                 tokio::select! {
                     _ = webrtc.send_buffer(&bytes) => {},
                     _ = ctx.cancelled() => {
@@ -62,6 +62,8 @@ impl GUIEventManager {
                         return;
                     }
                 }
+                kb += n;
+                tracing::info!("PRODUCED {} kb", kb / 1000);
                 spin_loop();
             }
         });

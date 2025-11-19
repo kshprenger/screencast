@@ -32,27 +32,24 @@ impl eframe::App for GUI {
 
         match curr_state {
             GUIState::Watching(frame_rx) => {
-                tracing::info!("Show frame");
+                let frame = frame_rx.recv().unwrap();
+                let width = frame.width as usize;
+                let height = frame.height as usize;
+                if width == 0 || height == 0 {
+                    return;
+                }
+                let color_image = ColorImage::from_rgba_premultiplied([width, height], &frame.data);
 
-                if let Ok(frame) = frame_rx.try_recv() {
-                    let width = frame.width as usize;
-                    let height = frame.height as usize;
-                    let frame_data = frame.data;
-
-                    let color_image =
-                        ColorImage::from_rgba_premultiplied([width, height], &frame_data);
-
-                    match &mut self.texture {
-                        Some(texture) => {
-                            texture.set(color_image, TextureOptions::NEAREST);
-                        }
-                        None => {
-                            self.texture = Some(ctx.load_texture(
-                                "video_frame",
-                                color_image,
-                                TextureOptions::NEAREST,
-                            ));
-                        }
+                match &mut self.texture {
+                    Some(texture) => {
+                        texture.set(color_image, TextureOptions::NEAREST);
+                    }
+                    None => {
+                        self.texture = Some(ctx.load_texture(
+                            "video_frame",
+                            color_image,
+                            TextureOptions::NEAREST,
+                        ));
                     }
                 }
 

@@ -27,14 +27,11 @@ use tokio_tungstenite::tungstenite::{self, Utf8Bytes};
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
+use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::{APIBuilder, API};
 use webrtc::ice_transport::ice_server::RTCIceServer;
-use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
 type WsTx = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::protocol::Message>;
@@ -359,7 +356,7 @@ impl WebrtcNetwork {
     pub async fn send_buffer(self: &Arc<Self>, buffer: &Bytes) {
         let state = self.conns_state.lock().await;
         futures_util::future::join_all(state.data_channels.iter().map(|channel| async {
-            channel.send(buffer).await.unwrap();
+            let _ = channel.send(buffer).await;
         }))
         .await;
     }

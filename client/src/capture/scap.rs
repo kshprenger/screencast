@@ -49,7 +49,7 @@ impl ScreenCapturer for ScapCapturer {
         thread::spawn(move || {
             let options = Options {
                 target: Some(target),
-                fps: 60,
+                fps: 45,
                 show_cursor: true,
                 show_highlight: false,
                 excluded_targets: None,

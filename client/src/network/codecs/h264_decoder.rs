@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::hint::spin_loop;
 use std::sync::Mutex;
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -7,6 +7,7 @@ use bytes::Bytes;
 use ffmpeg_next::format::Pixel;
 use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
 use ffmpeg_next::{codec, frame, packet};
+use tokio::sync::watch;
 
 use crate::capture::{Frame, VideoErrors};
 
@@ -87,6 +88,9 @@ fn run_decoder(
         .video()
         .unwrap();
 
+    // Set low-delay flag
+    decoder.set_flags(ffmpeg_next::codec::Flags::LOW_DELAY);
+
     let mut scaler: Option<Context> = None;
 
     while *running.lock().unwrap() {
@@ -144,9 +148,7 @@ fn run_decoder(
                 break;
             }
         }
-
-        // Small sleep to avoid busy-waiting
-        thread::sleep(std::time::Duration::from_millis(1));
+        spin_loop();
     }
 
     tracing::info!("Decoder thread terminated");
@@ -175,7 +177,7 @@ fn process_decoded_frame(
             Pixel::RGBA,
             1080,
             720,
-            Flags::BILINEAR,
+            Flags::FAST_BILINEAR,
         )
         .ok();
 
