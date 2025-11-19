@@ -48,9 +48,9 @@ impl GUIEventManager {
 
         tokio::spawn(async move {
             loop {
-                let mut buffer = [0; 16384];
-                h264_stream.read(&mut buffer).unwrap();
-                let bytes = Bytes::copy_from_slice(&buffer);
+                let mut buffer = [0; 16384]; // This is upper bound size for webrtc on_message message
+                let n = h264_stream.read(&mut buffer).unwrap();
+                let bytes = Bytes::copy_from_slice(&buffer[..n]);
                 tokio::select! {
                     _ = webrtc.send_buffer(&bytes) => {},
                     _ = ctx.cancelled() => {
