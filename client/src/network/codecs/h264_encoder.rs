@@ -56,30 +56,24 @@ impl H264Encoder {
 
 impl Read for H264Encoder {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        loop {
-            let mut buffer = self.buffer.lock().unwrap();
-            // If there's data in the buffer, copy it to the read buffer
-            if !buffer.is_empty() {
-                let bytes_to_copy = std::cmp::min(buf.len(), buffer.len());
-                for i in 0..bytes_to_copy {
-                    buf[i] = buffer.pop_front().unwrap();
-                }
-                return Ok(bytes_to_copy);
+        let mut buffer = self.buffer.lock().unwrap();
+
+        if !buffer.is_empty() {
+            let bytes_to_copy = std::cmp::min(buf.len(), buffer.len());
+            for i in 0..bytes_to_copy {
+                buf[i] = buffer.pop_front().unwrap();
             }
-
-            // Drop the lock before checking done status
-            drop(buffer);
-
-            // Check if we're done and buffer is empty
-            let is_done = *self.done.lock().unwrap();
-            if is_done {
-                return Ok(0); // EOF
-            }
-
-            // Brief sleep to avoid busy-waiting
-            // thread::sleep(std::time::Duration::from_millis(1));
-            spin_loop(); // Optimize
+            return Ok(bytes_to_copy);
         }
+
+        drop(buffer);
+
+        let is_done = *self.done.lock().unwrap();
+        if is_done {
+            return Ok(0); // EOF
+        }
+
+        Ok(0)
     }
 }
 
@@ -108,6 +102,7 @@ fn run_encoder(
     let mut frame_num = 0;
 
     while let Ok(frame_data) = frame_rx.recv() {
+        tracing::info!("Got frame from scap");
         let width = frame_data.width as u32;
         let height = frame_data.height as u32;
 

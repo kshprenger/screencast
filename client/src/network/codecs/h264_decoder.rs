@@ -206,7 +206,6 @@ fn process_decoded_frame(
         data: bgra_frame.data(0).to_vec(),
     };
 
-    // Send the frame
     frame_tx.send(frame).unwrap();
 
     Ok(())

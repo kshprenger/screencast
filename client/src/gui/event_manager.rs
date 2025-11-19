@@ -50,7 +50,11 @@ impl GUIEventManager {
             loop {
                 let mut buffer = [0; 16384]; // This is upper bound size for webrtc on_message message
                 let n = h264_stream.read(&mut buffer).unwrap();
+                if n == 0 {
+                    continue;
+                }
                 let bytes = Bytes::copy_from_slice(&buffer[..n]);
+                tracing::info!("SENDING DATA");
                 tokio::select! {
                     _ = webrtc.send_buffer(&bytes) => {},
                     _ = ctx.cancelled() => {
@@ -58,7 +62,6 @@ impl GUIEventManager {
                         return;
                     }
                 }
-                sleep(Duration::from_millis(1)).await;
                 spin_loop();
             }
         });

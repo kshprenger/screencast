@@ -32,6 +32,8 @@ impl eframe::App for GUI {
 
         match curr_state {
             GUIState::Watching(frame_rx) => {
+                tracing::info!("Show frame");
+
                 if let Ok(frame) = frame_rx.try_recv() {
                     let width = frame.width as usize;
                     let height = frame.height as usize;
