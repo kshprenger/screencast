@@ -6,6 +6,7 @@ use tracing_subscriber::FmtSubscriber;
 
 mod capture;
 mod cli;
+mod codecs;
 mod gui;
 mod network;
 

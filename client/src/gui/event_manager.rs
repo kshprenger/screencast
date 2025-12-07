@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use tokio::sync::Mutex;
 
-use crate::network::H264Encoder;
+use crate::codecs::H264Encoder;
 
 use crate::{
     capture::{self},

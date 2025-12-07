@@ -1,11 +1,9 @@
-mod codecs;
 mod connection;
 mod errors;
 mod events;
 mod state;
 
 use bytes::Bytes;
-pub use codecs::*;
 
 pub use events::WebrtcEvents;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
