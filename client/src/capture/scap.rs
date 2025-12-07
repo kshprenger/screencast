@@ -54,7 +54,7 @@ impl ScreenCapturer for ScapCapturer {
                 show_highlight: false,
                 excluded_targets: None,
                 output_type: scap::frame::FrameType::BGRAFrame,
-                output_resolution: scap::capturer::Resolution::_720p,
+                output_resolution: scap::capturer::Resolution::_1080p,
                 crop_area: None,
             };
 
