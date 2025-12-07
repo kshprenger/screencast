@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use tokio::sync::Mutex;
 
-use crate::codecs::H264Encoder;
+use crate::codecs::{self, H264Encoder};
 
 use crate::{
     capture::{self},
@@ -77,8 +77,39 @@ impl GUIEventManager {
                     *self.state.lock().await = GUIState::Streaming;
                     self.start_sending_frames(ctx.clone()).await
                 }
-                WebrtcEvents::TrackArrived(track) => {
-                    *self.state.lock().await = GUIState::Watching(track);
+                WebrtcEvents::TrackArrived(mut data_rx) => {
+                    let (decoder, frame_rx) = codecs::H264Decoder::start_decoding().unwrap();
+
+                    std::thread::spawn(move || {
+                        let mut buf = Vec::new();
+                        let separator = [0x00, 0x00, 0x00, 0x01];
+                        let mut mb = 0;
+                        loop {
+                            let data = data_rx.blocking_recv().unwrap();
+                            tracing::info!("DATA: {} kb", mb / 1_000);
+                            mb += data.len();
+                            buf.extend_from_slice(&data);
+
+                            let mut separator_positions = Vec::new();
+                            for i in 0..buf.len().saturating_sub(3) {
+                                if &buf[i..i + 4] == separator {
+                                    separator_positions.push(i);
+                                }
+                            }
+
+                            if separator_positions.len() >= 2 {
+                                let start = separator_positions[0];
+                                let end = separator_positions[1];
+                                let nal_unit = &buf[start..end];
+                                decoder
+                                    .feed_data(Bytes::copy_from_slice(&nal_unit))
+                                    .unwrap();
+                                buf.drain(..end);
+                            }
+                        }
+                    });
+
+                    *self.state.lock().await = GUIState::Watching(frame_rx);
                 }
                 WebrtcEvents::TrackRemoved => {
                     *self.state.lock().await = GUIState::Idle;

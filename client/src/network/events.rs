@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 pub enum WebrtcEvents {
     GatheredAnswers,
-    TrackArrived(std::sync::mpsc::Receiver<crate::capture::Frame>),
+    TrackArrived(tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>),
     TrackRemoved,
 }
 

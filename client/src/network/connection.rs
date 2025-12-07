@@ -44,7 +44,8 @@ impl WebrtcNetwork {
             let self_clone2 = Arc::clone(&self_clone1);
             tracing::info!("Received remote track");
             Box::pin(async move {
-                let (decoder, frame_rx) = codecs::H264Decoder::start_decoding().unwrap();
+                let (data_tx, data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+
                 self_clone2
                     .conns_state
                     .lock()
@@ -53,7 +54,7 @@ impl WebrtcNetwork {
                     .as_ref()
                     .and_then(|chan| {
                         // Notify GUI about stream with decoded frame channel
-                        if let Err(err) = chan.send(WebrtcEvents::TrackArrived(frame_rx)) {
+                        if let Err(err) = chan.send(WebrtcEvents::TrackArrived(data_rx)) {
                             tracing::error!("Could not send track event to GUI: {err}");
                         }
                         Some(())
@@ -62,37 +63,6 @@ impl WebrtcNetwork {
                         tracing::warn!("No GUI event subscription");
                         Some(())
                     });
-
-                let (data_tx, mut data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-
-                std::thread::spawn(move || {
-                    let mut buf = Vec::new();
-                    let separator = [0x00, 0x00, 0x00, 0x01];
-                    let mut mb = 0;
-                    loop {
-                        let data = data_rx.blocking_recv().unwrap();
-                        tracing::info!("DATA: {} kb", mb / 1_000);
-                        mb += data.len();
-                        buf.extend_from_slice(&data);
-
-                        let mut separator_positions = Vec::new();
-                        for i in 0..buf.len().saturating_sub(3) {
-                            if &buf[i..i + 4] == separator {
-                                separator_positions.push(i);
-                            }
-                        }
-
-                        if separator_positions.len() >= 2 {
-                            let start = separator_positions[0];
-                            let end = separator_positions[1];
-                            let nal_unit = &buf[start..end];
-                            decoder
-                                .feed_data(Bytes::copy_from_slice(&nal_unit))
-                                .unwrap();
-                            buf.drain(..end);
-                        }
-                    }
-                });
 
                 data_channel.on_open(Box::new(|| {
                     tracing::info!("Data channel opened");
