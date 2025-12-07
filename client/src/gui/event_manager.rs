@@ -1,11 +1,9 @@
 use std::hint::spin_loop;
 use std::io::Read;
 use std::sync::Arc;
-use std::time::Duration;
 
 use bytes::Bytes;
 use capture::ScreenCapturer;
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use tokio::sync::Mutex;

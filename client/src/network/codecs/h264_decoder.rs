@@ -7,7 +7,6 @@ use bytes::Bytes;
 use ffmpeg_next::format::Pixel;
 use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
 use ffmpeg_next::{codec, frame, packet};
-use tokio::sync::watch;
 
 use crate::capture::{Frame, VideoErrors};
 

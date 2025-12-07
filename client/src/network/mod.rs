@@ -252,7 +252,6 @@ impl WebrtcNetwork {
 
         let mut m = MediaEngine::default();
         m.register_default_codecs().unwrap(); // Safe
-
         let api = APIBuilder::new().with_media_engine(m).build();
 
         Arc::new(Self {

@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::hint::spin_loop;
 use std::io::{self, Read};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
