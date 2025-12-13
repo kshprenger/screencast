@@ -54,7 +54,7 @@ impl ScreenCapturer for ScapCapturer {
                 show_highlight: false,
                 excluded_targets: None,
                 output_type: scap::frame::FrameType::BGRAFrame,
-                output_resolution: scap::capturer::Resolution::_1080p,
+                output_resolution: scap::capturer::Resolution::Captured,
                 crop_area: None,
             };
 
@@ -80,7 +80,11 @@ impl ScreenCapturer for ScapCapturer {
                             scap::frame::Frame::BGRA(bgra_frame) => Frame {
                                 width: bgra_frame.width as u32,
                                 height: bgra_frame.height as u32,
-                                data: bgra_frame.data,
+                                data: bgra_align_32(
+                                    bgra_frame.width,
+                                    bgra_frame.height,
+                                    bgra_frame.data,
+                                ),
                             },
                             _ => unreachable!(),
                         };
@@ -110,6 +114,25 @@ impl ScreenCapturer for ScapCapturer {
     }
 }
 
+fn bgra_align_32(width: i32, height: i32, data: Vec<u8>) -> Vec<u8> {
+    let width_bytes = (width * 4) as usize;
+    let remainder = width_bytes % 32;
+
+    if remainder == 0 {
+        return data;
+    }
+
+    let padding_per_row = 32 - remainder;
+    let new_stride = width_bytes + padding_per_row;
+    let mut new_data = Vec::with_capacity(new_stride * (height as usize));
+
+    for row in data.chunks(width_bytes) {
+        new_data.extend_from_slice(row);
+        new_data.extend(std::iter::repeat(0).take(padding_per_row));
+    }
+
+    new_data
+}
 #[cfg(test)]
 mod tests {
     use tokio::time::Instant;

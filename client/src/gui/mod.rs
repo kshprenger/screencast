@@ -38,7 +38,8 @@ impl eframe::App for GUI {
                 if width == 0 || height == 0 {
                     return;
                 }
-                let color_image = ColorImage::from_rgba_premultiplied([width, height], &frame.data);
+
+                let color_image = ColorImage::from_rgba_unmultiplied([width, height], &frame.data);
 
                 match &mut self.texture {
                     Some(texture) => {
@@ -56,23 +57,19 @@ impl eframe::App for GUI {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     if let Some(texture) = &self.texture {
                         let available_size = ui.available_size();
+                        let (rect, _) =
+                            ui.allocate_exact_size(available_size, egui::Sense::hover());
 
-                        let texture_size = texture.size_vec2();
-                        let aspect_ratio = texture_size.x / texture_size.y;
-
-                        let display_size = if available_size.x / available_size.y > aspect_ratio {
-                            // Window is wider than video
-                            Vec2::new(available_size.y * aspect_ratio, available_size.y)
-                        } else {
-                            // Window is taller than video
-                            Vec2::new(available_size.x, available_size.x / aspect_ratio)
-                        };
-
-                        // Center the image
-                        let (rect, _) = ui.allocate_exact_size(display_size, egui::Sense::hover());
-                        ui.put(
-                            rect,
-                            egui::Image::new(texture).fit_to_exact_size(display_size),
+                        // Get the full available size
+                        let painter = ui.painter();
+                        painter.image(
+                            texture.id(),
+                            rect, // Target rectangle (full available space)
+                            egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0), // Top-left UV
+                                egui::pos2(1.0, 1.0), // Bottom-right UV (FULL texture)
+                            ),
+                            egui::Color32::WHITE,
                         );
                     } else {
                         ui.centered_and_justified(|ui| {

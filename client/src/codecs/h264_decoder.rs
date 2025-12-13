@@ -1,6 +1,6 @@
 use std::hint::spin_loop;
-use std::sync::Mutex;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use bytes::Bytes;
@@ -30,6 +30,7 @@ use crate::capture::{Frame, VideoErrors};
 ///     // Process RGB frame
 /// }
 /// ```
+#[derive(Clone)]
 pub struct H264Decoder {
     /// Channel sender for feeding H264 data to the decoder thread
     data_tx: mpsc::Sender<Bytes>,
@@ -38,7 +39,7 @@ pub struct H264Decoder {
 }
 
 impl H264Decoder {
-    pub fn start_decoding() -> Result<(Self, mpsc::Receiver<Frame>), VideoErrors> {
+    pub fn start_decoding(dims: (u32, u32)) -> Result<(Self, mpsc::Receiver<Frame>), VideoErrors> {
         // Safe to call multiple times
         let _ = ffmpeg_next::init();
 
@@ -50,7 +51,7 @@ impl H264Decoder {
         *running.lock().unwrap() = true;
 
         thread::spawn(move || {
-            if let Err(e) = run_decoder(data_rx, frame_tx, running_clone) {
+            if let Err(e) = run_decoder(data_rx, frame_tx, running_clone, dims) {
                 tracing::error!("Decoder thread error: {e}");
             }
         });
@@ -79,6 +80,7 @@ fn run_decoder(
     data_rx: mpsc::Receiver<Bytes>,
     frame_tx: mpsc::Sender<Frame>,
     running: Arc<Mutex<bool>>,
+    dims: (u32, u32),
 ) -> Result<(), VideoErrors> {
     let codec = codec::decoder::find(codec::Id::H264).unwrap();
 
@@ -113,6 +115,7 @@ fn run_decoder(
                                         &decoded_frame,
                                         &frame_tx,
                                         &mut scaler,
+                                        dims,
                                     ) {
                                         tracing::error!("Failed to process decoded frame: {e}");
                                     }
@@ -159,23 +162,28 @@ fn process_decoded_frame(
     decoded_frame: &frame::Video,
     frame_tx: &mpsc::Sender<Frame>,
     scaler: &mut Option<Context>,
+    dims: (u32, u32),
 ) -> Result<(), VideoErrors> {
     let width = decoded_frame.width();
     let height = decoded_frame.height();
     let input_format = decoded_frame.format();
 
+    let (out_width, out_height) = dims;
+
     // Create or update scaler if needed
     if scaler.is_none()
         || scaler.as_ref().unwrap().input().width != width
         || scaler.as_ref().unwrap().input().height != height
+        || scaler.as_ref().unwrap().output().width != out_width
+        || scaler.as_ref().unwrap().output().height != out_height
     {
         *scaler = Context::get(
             input_format,
             width,
             height,
             Pixel::RGBA,
-            1080,
-            720,
+            out_width,
+            out_height,
             Flags::FAST_BILINEAR,
         )
         .ok();
@@ -191,7 +199,7 @@ fn process_decoded_frame(
     }
 
     // Create output frame in RGB format
-    let mut bgra_frame = frame::Video::new(Pixel::RGBA, 1080, 720);
+    let mut bgra_frame = frame::Video::new(Pixel::RGBA, out_width, out_height);
 
     // Convert to RGB
     if let Some(ref mut ctx) = scaler {
@@ -202,8 +210,8 @@ fn process_decoded_frame(
     }
 
     let frame = Frame {
-        width: 1080,
-        height: 720,
+        width: out_width,
+        height: out_height,
         data: bgra_frame.data(0).to_vec(),
     };
 

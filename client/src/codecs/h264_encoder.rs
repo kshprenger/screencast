@@ -86,8 +86,8 @@ fn run_encoder(
         .video()
         .unwrap();
 
-    video.set_width(1080);
-    video.set_height(720);
+    video.set_width(1920);
+    video.set_height(1080);
     video.set_format(Pixel::YUV420P);
     video.set_frame_rate(Some((60, 1)));
     video.set_time_base((1, 60));
@@ -128,8 +128,8 @@ fn run_encoder(
                 width,
                 height,
                 Pixel::YUV420P,
-                width,
-                height,
+                1920,
+                1080,
                 Flags::FAST_BILINEAR,
             )
             .ok();
@@ -148,7 +148,7 @@ fn run_encoder(
         }
 
         let mut input_frame = frame::Video::new(Pixel::BGRA, width, height);
-        let mut output_frame = frame::Video::new(Pixel::YUV420P, width, height);
+        let mut output_frame = frame::Video::new(Pixel::YUV420P, 1920, 1080);
 
         let frame_data_slice = frame_data.data.as_slice();
         let input_frame_data = input_frame.data_mut(0);

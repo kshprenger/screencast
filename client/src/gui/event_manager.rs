@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use tokio::sync::Mutex;
 
-use crate::codecs::{self, H264Encoder};
+use crate::codecs::{self, H264Decoder, H264Encoder};
 
 use crate::{
     capture::{self},
@@ -22,6 +22,7 @@ pub struct GUIEventManager {
     webrtc: Arc<WebrtcNetwork>,
     async_rt: Arc<tokio::runtime::Runtime>,
     state: Arc<Mutex<GUIState>>,
+    decoder: Arc<Mutex<Option<H264Decoder>>>,
 }
 
 impl GUIEventManager {
@@ -45,7 +46,6 @@ impl GUIEventManager {
         let webrtc = Arc::clone(&self.webrtc);
 
         tokio::spawn(async move {
-            let mut kb = 0;
             loop {
                 let mut buffer = [0; 16384]; // This is upper bound size for webrtc on_message message
                 let n = h264_stream.read(&mut buffer).unwrap();
@@ -60,8 +60,6 @@ impl GUIEventManager {
                         return;
                     }
                 }
-                kb += n;
-                tracing::info!("PRODUCED {} kb", kb / 1000);
                 spin_loop();
             }
         });
@@ -78,16 +76,17 @@ impl GUIEventManager {
                     self.start_sending_frames(ctx.clone()).await
                 }
                 WebrtcEvents::TrackArrived(mut data_rx) => {
-                    let (decoder, frame_rx) = codecs::H264Decoder::start_decoding().unwrap();
-
+                    let (decoder, frame_rx) =
+                        codecs::H264Decoder::start_decoding((1080, 720)).unwrap();
+                    *self.decoder.lock().await = Some(decoder.clone());
                     std::thread::spawn(move || {
                         let mut buf = Vec::new();
                         let separator = [0x00, 0x00, 0x00, 0x01];
-                        let mut mb = 0;
+                        // let mut mb = 0;
                         loop {
                             let data = data_rx.blocking_recv().unwrap();
-                            tracing::info!("DATA: {} kb", mb / 1_000);
-                            mb += data.len();
+                            // tracing::info!("DATA: {} kb", mb / 1_000);
+                            // mb += data.len();
                             buf.extend_from_slice(&data);
 
                             let mut separator_positions = Vec::new();
@@ -132,6 +131,7 @@ impl GUIEventManager {
             webrtc,
             async_rt: Arc::clone(&async_rt),
             state,
+            decoder: Arc::new(Mutex::new(None)),
         });
         async_rt.spawn(Arc::clone(&manager).handle_events());
         manager

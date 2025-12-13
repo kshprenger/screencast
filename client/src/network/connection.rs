@@ -1,15 +1,11 @@
 use std::sync::Arc;
 
-use bytes::Bytes;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc_model::{RoutedSignallingMessage, Routing, SignallingMessage};
 
-use crate::{
-    codecs,
-    network::{WebrtcEvents, WebrtcNetwork},
-};
+use crate::network::{WebrtcEvents, WebrtcNetwork};
 
 impl WebrtcNetwork {
     async fn setup_on_ice_candidate(self: &Arc<Self>, conn: &RTCPeerConnection, to: Uuid) {
