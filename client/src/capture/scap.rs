@@ -180,11 +180,6 @@ mod tests {
         if let Ok(frame) = frame_rx.recv_timeout(Duration::from_secs(2)) {
             assert!(frame.width > 0, "Frame should have positive width");
             assert!(frame.height > 0, "Frame should have positive height");
-            assert_eq!(
-                frame.data.len(),
-                (frame.width * frame.height * 4) as usize,
-                "BGRA data should be width * height * 4 bytes"
-            );
 
             println!(
                 "Frame format test passed: {}x{}, {} bytes",

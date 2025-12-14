@@ -8,32 +8,16 @@ use ffmpeg_next::format::Pixel;
 use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
 use ffmpeg_next::{codec, frame};
 
-use crate::capture::{Frame, VideoErrors};
+use crate::capture::Frame;
+use crate::codecs::errors::CodecErrors;
 
-/// A wrapper that transforms a frame channel stream into a Read trait implementation
-/// that provides H.264 encoded data on the fly.
-///
-/// # Color Space Conversion
-///
-/// The reader assumes input frames are in RGB format (as provided by `XCapCapturer`).
-/// It automatically converts to YUV420 (I420) format required by the H.264 encoder using
-/// FFmpeg's high-performance scaling context.
-///
-/// # Threading
-///
-/// The encoder thread runs continuously, pulling frames from the receiver channel and
-/// encoding them. Reading from the H264Encoder will block briefly if the buffer is empty,
-/// allowing the encoder thread to catch up. The thread terminates when the frame channel
-/// is closed.
 pub struct H264Encoder {
-    /// Buffer holding encoded data ready to be read
     buffer: Arc<Mutex<VecDeque<u8>>>,
-    /// Flag to signal when the encoder thread is done
     done: Arc<Mutex<bool>>,
 }
 
 impl H264Encoder {
-    pub fn new(frame_rx: mpsc::Receiver<Frame>) -> Result<Self, VideoErrors> {
+    pub fn new(frame_rx: mpsc::Receiver<Frame>) -> Result<Self, CodecErrors> {
         // Safe to call multiple times
         let _ = ffmpeg_next::init();
 
@@ -79,12 +63,12 @@ fn run_encoder(
     frame_rx: mpsc::Receiver<Frame>,
     buffer: Arc<Mutex<VecDeque<u8>>>,
     done: Arc<Mutex<bool>>,
-) -> Result<(), VideoErrors> {
-    let codec = codec::encoder::find(codec::Id::H264).unwrap();
+) -> Result<(), CodecErrors> {
+    let codec = codec::encoder::find(codec::Id::H264).expect("No h264 codec");
     let mut video = codec::context::Context::new_with_codec(codec)
         .encoder()
         .video()
-        .unwrap();
+        .unwrap(); // Safe because codec is present
 
     video.set_width(1920);
     video.set_height(1080);
@@ -92,11 +76,11 @@ fn run_encoder(
     video.set_frame_rate(Some((60, 1)));
     video.set_time_base((1, 60));
 
-    // Configure for low-latency streaming
+    // low-latency streaming
     video.set_gop(60); // GOP size = 1 second at 60fps
     video.set_max_b_frames(0); // Disable B-frames for lowest latency
 
-    // Open with low-latency options
+    // low-latency options
     let mut encoder = video
         .open_as_with(
             codec,
@@ -109,8 +93,6 @@ fn run_encoder(
             .collect(),
         )
         .unwrap();
-
-    // let mut encoder = video.open().unwrap();
 
     let mut scaler: Option<Context> = None;
     let mut prev_width = 0;
@@ -153,7 +135,7 @@ fn run_encoder(
         let frame_data_slice = frame_data.data.as_slice();
         let input_frame_data = input_frame.data_mut(0);
 
-        // Safe
+        // Safe, because data already align as avbuffer format in scap capturer
         input_frame_data.copy_from_slice(&frame_data_slice);
 
         if let Some(ref mut ctx) = scaler {
@@ -173,7 +155,7 @@ fn run_encoder(
 
         let mut encoded_packet = ffmpeg_next::packet::Packet::empty();
         while encoder.receive_packet(&mut encoded_packet).is_ok() {
-            let data = encoded_packet.data().unwrap();
+            let data = encoded_packet.data().unwrap(); // Sage because recv is ok
             let mut buf = buffer.lock().unwrap();
             buf.extend(data);
         }

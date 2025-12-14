@@ -82,11 +82,9 @@ impl GUIEventManager {
                     std::thread::spawn(move || {
                         let mut buf = Vec::new();
                         let separator = [0x00, 0x00, 0x00, 0x01];
-                        // let mut mb = 0;
                         loop {
                             let data = data_rx.blocking_recv().unwrap();
-                            // tracing::info!("DATA: {} kb", mb / 1_000);
-                            // mb += data.len();
+
                             buf.extend_from_slice(&data);
 
                             let mut separator_positions = Vec::new();
@@ -102,7 +100,7 @@ impl GUIEventManager {
                                 let nal_unit = &buf[start..end];
                                 decoder
                                     .feed_data(Bytes::copy_from_slice(&nal_unit))
-                                    .unwrap();
+                                    .unwrap(); // Valid nal unit provided
                                 buf.drain(..end);
                             }
                         }

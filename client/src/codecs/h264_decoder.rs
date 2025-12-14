@@ -9,37 +9,16 @@ use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
 use ffmpeg_next::{codec, frame, packet};
 
 use crate::capture::{Frame, VideoErrors};
+use crate::codecs::errors::CodecErrors;
 
-/// H264 decoder that converts WebRTC H264 samples to RGB frames
-///
-/// This decoder receives H264-encoded data packets (typically from WebRTC)
-/// and decodes them into RGB frames that match the Frame format defined
-/// in the capture module.
-///
-/// # Usage
-///
-/// ```rust
-/// let decoder = H264Decoder::new()?;
-/// let frame_rx = decoder.start_decoding();
-///
-/// // Feed H264 data to the decoder
-/// decoder.feed_data(h264_bytes)?;
-///
-/// // Receive decoded frames
-/// while let Ok(frame) = frame_rx.recv() {
-///     // Process RGB frame
-/// }
-/// ```
 #[derive(Clone)]
 pub struct H264Decoder {
-    /// Channel sender for feeding H264 data to the decoder thread
     data_tx: mpsc::Sender<Bytes>,
-    /// Internal state to track if decoder is running
     running: Arc<Mutex<bool>>,
 }
 
 impl H264Decoder {
-    pub fn start_decoding(dims: (u32, u32)) -> Result<(Self, mpsc::Receiver<Frame>), VideoErrors> {
+    pub fn start_decoding(dims: (u32, u32)) -> Result<(Self, mpsc::Receiver<Frame>), CodecErrors> {
         // Safe to call multiple times
         let _ = ffmpeg_next::init();
 
@@ -59,8 +38,8 @@ impl H264Decoder {
         Ok((Self { data_tx, running }, frame_rx))
     }
 
-    pub fn feed_data(&self, data: Bytes) -> Result<(), VideoErrors> {
-        self.data_tx.send(data).unwrap();
+    pub fn feed_data(&self, data: Bytes) -> Result<(), CodecErrors> {
+        self.data_tx.send(data).unwrap(); // Safe
         Ok(())
     }
 
@@ -82,14 +61,13 @@ fn run_decoder(
     running: Arc<Mutex<bool>>,
     dims: (u32, u32),
 ) -> Result<(), VideoErrors> {
-    let codec = codec::decoder::find(codec::Id::H264).unwrap();
+    let codec = codec::decoder::find(codec::Id::H264).expect("No h264 codec");
 
     let mut decoder = codec::context::Context::new_with_codec(codec)
         .decoder()
         .video()
-        .unwrap();
+        .unwrap(); // Safe, because codec is present
 
-    // Set low-delay flag
     decoder.set_flags(ffmpeg_next::codec::Flags::LOW_DELAY);
 
     let mut scaler: Option<Context> = None;
@@ -136,8 +114,7 @@ fn run_decoder(
                     Err(ffmpeg_next::Error::Other {
                         errno: ffmpeg_next::error::EAGAIN,
                     }) => {
-                        // Decoder needs more data
-                        tracing::warn!("Decoder needs more data, but we are not buffering. This might be an issue.");
+                        tracing::warn!("Decoder needs more data");
                         break;
                     }
                     Err(e) => {
@@ -163,7 +140,7 @@ fn process_decoded_frame(
     frame_tx: &mpsc::Sender<Frame>,
     scaler: &mut Option<Context>,
     dims: (u32, u32),
-) -> Result<(), VideoErrors> {
+) -> Result<(), CodecErrors> {
     let width = decoded_frame.width();
     let height = decoded_frame.height();
     let input_format = decoded_frame.format();
@@ -172,7 +149,7 @@ fn process_decoded_frame(
 
     // Create or update scaler if needed
     if scaler.is_none()
-        || scaler.as_ref().unwrap().input().width != width
+        || scaler.as_ref().unwrap().input().width != width // Safe: None check first
         || scaler.as_ref().unwrap().input().height != height
         || scaler.as_ref().unwrap().output().width != out_width
         || scaler.as_ref().unwrap().output().height != out_height
@@ -194,7 +171,7 @@ fn process_decoded_frame(
                 width,
                 height,
             );
-            return Err(VideoErrors::CannotCapture);
+            return Err(CodecErrors::CannotDecode);
         }
     }
 
@@ -205,7 +182,7 @@ fn process_decoded_frame(
     if let Some(ref mut ctx) = scaler {
         ctx.run(decoded_frame, &mut bgra_frame).map_err(|err| {
             tracing::error!("{err}");
-            VideoErrors::CannotCapture
+            return CodecErrors::CannotDecode;
         })?;
     }
 
@@ -215,7 +192,7 @@ fn process_decoded_frame(
         data: bgra_frame.data(0).to_vec(),
     };
 
-    frame_tx.send(frame).unwrap();
+    frame_tx.send(frame).unwrap(); // Safe
 
     Ok(())
 }

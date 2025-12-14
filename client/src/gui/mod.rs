@@ -1,7 +1,7 @@
 mod event_manager;
 mod state;
 
-use egui::{ColorImage, TextureHandle, TextureOptions, Vec2};
+use egui::{ColorImage, TextureHandle, TextureOptions};
 pub use event_manager::GUIEventManager;
 pub use state::GUIState;
 

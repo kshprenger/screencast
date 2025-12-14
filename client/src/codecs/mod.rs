@@ -1,3 +1,4 @@
+mod errors;
 mod h264_decoder;
 mod h264_encoder;
 
